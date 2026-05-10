@@ -3,7 +3,7 @@
 # release.sh — Strip, zip, checksum, and publish the libVLC xcframework.
 #
 # Prerequisites:
-#   - ./scripts/build-libvlc.sh --all  (produces Vendor/libvlc.xcframework)
+#   - ./scripts/build-libvlc.sh --ios-only  (produces Vendor/libvlc.xcframework)
 #   - gh authed (gh auth login)
 #   - Clean Package.swift + Showcase project on main
 #
@@ -19,17 +19,11 @@ SHOWCASE_PROJECT="Showcase/SwiftVLCShowcase.xcodeproj/project.pbxproj"
 ZIP_NAME="libvlc.xcframework.zip"
 MAX_SIZE=$((2 * 1024 * 1024 * 1024))  # 2 GB (GitHub release asset limit)
 
-# All 8 slices the xcframework must contain. If a slice is missing, the release
-# would ship a partial artifact that fails on one of SwiftVLC's Apple platforms.
+# All iOS slices the xcframework must contain. If a slice is missing, the release
+# would ship a partial artifact that fails on iOS devices or simulators.
 EXPECTED_SLICES=(
   "ios-arm64"
   "ios-arm64_x86_64-simulator"
-  "tvos-arm64"
-  "tvos-arm64_x86_64-simulator"
-  "xros-arm64"
-  "xros-arm64_x86_64-simulator"
-  "macos-arm64_x86_64"
-  "ios-arm64_x86_64-maccatalyst"
 )
 
 # ── Args ──────────────────────────────────────────────────────────────────────
@@ -233,7 +227,7 @@ for slice in "${EXPECTED_SLICES[@]}"; do
 done
 if [[ ${#missing_slices[@]} -gt 0 ]]; then
   echo "Error: xcframework is missing slices: ${missing_slices[*]}" >&2
-  echo "  Re-run ./scripts/build-libvlc.sh --all to build all platforms." >&2
+  echo "  Re-run ./scripts/build-libvlc.sh --ios-only to build the iOS slices." >&2
   exit 1
 fi
 
@@ -405,9 +399,9 @@ gh release create "$TAG" "$ZIP_PATH" \
   --notes "$(cat <<EOF
 ## libVLC xcframework
 
-Pre-built static xcframework for libVLC 4.0.
+Pre-built iOS xcframework for libVLC 4.0.
 
-**Platforms:** iOS 18+, macOS 15+, tvOS 18+, visionOS 2+, Mac Catalyst
+**Platforms:** iOS 18+
 **Size:** ${ZIP_SIZE_MB} MB (stripped)
 **Checksum:** \`$CHECKSUM\`
 

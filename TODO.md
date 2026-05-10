@@ -58,12 +58,25 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
     - The final local output remains `Vendor/libvlc.xcframework`, but it should
       contain iOS framework slices, not static libraries.
 
-- `[ ]` T02 - Narrow the package and scripts to iOS
+- `[x]` T02 - Narrow the package and scripts to iOS
   - Remove or disable non-iOS platform selection in `scripts/build-libvlc.sh`.
   - Update release/setup assumptions so they expect iOS device and simulator
     slices only.
   - Decide whether `Package.swift` should drop non-iOS platform declarations or
     merely stop publishing non-iOS binary slices, then apply the approved choice.
+  - Completed:
+    - `scripts/build-libvlc.sh` now documents iOS as its only rebuild target and
+      rejects `--all`, tvOS, visionOS, macOS, and Catalyst build flags with a
+      clear error.
+    - `scripts/release.sh` now expects only `ios-arm64` and
+      `ios-arm64_x86_64-simulator` slices and describes the release artifact as
+      iOS-only.
+    - `scripts/setup-dev.sh` has no platform-slice whitelist; its remaining
+      static-archive cleanup path is tracked for the dynamic packaging work.
+    - `Package.swift` platform declarations were left unchanged per owner
+      decision.
+    - `scripts/build-libvlc.sh --help` and unsupported platform flags now reach
+      argument handling even when CPU-count probing is restricted.
 
 - `[ ]` T03 - Make the libVLC build explicitly LGPL-oriented
   - Add explicit build configuration for LGPL mode if supported by VLC's build

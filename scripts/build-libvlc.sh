@@ -1,5 +1,5 @@
 #!/bin/bash
-# build-libvlc.sh — Compiles libVLC from official VLC source for Apple platforms
+# build-libvlc.sh — Compiles libVLC from official VLC source for iOS
 # Produces: Vendor/libvlc.xcframework (static library + C headers)
 #
 # Prerequisites:
@@ -10,10 +10,7 @@
 #
 # Usage:
 #   ./build-libvlc.sh              # Build for iOS device + simulator
-#   ./build-libvlc.sh --all        # Build for iOS, tvOS, visionOS, macOS, Catalyst
 #   ./build-libvlc.sh --ios-only   # iOS device + simulator only
-#   ./build-libvlc.sh --macos-only # macOS only (fastest for dev)
-#   ./build-libvlc.sh --catalyst   # Add Mac Catalyst (arm64 + x86_64)
 #   ./build-libvlc.sh --clean      # Remove build directory
 #   ./build-libvlc.sh --hash=abc   # Pin to a specific VLC commit
 
@@ -50,10 +47,6 @@ SWIFTVLC_MIN_CATALYST="18.0"
 
 BUILD_START_TIME=$(date +%s)
 
-if [ -z "$MAKEFLAGS" ]; then
-    MAKEFLAGS="-j$(sysctl -n machdep.cpu.core_count || nproc)"
-fi
-
 # --- Terminal color support ---
 # Guard tput calls for non-terminal contexts (CI runners, piped output)
 if [ -t 1 ] && command -v tput >/dev/null 2>&1 && tput colors >/dev/null 2>&1; then
@@ -88,6 +81,33 @@ error() {
     echo "[${COLOR_RED}error${COLOR_RESET}] [$(elapsed)] $1" >&2
     exit 1
 }
+
+detect_core_count() {
+    local cores=""
+
+    if cores=$(sysctl -n machdep.cpu.core_count 2>/dev/null) && [ -n "$cores" ]; then
+        echo "$cores"
+        return 0
+    fi
+
+    if command -v nproc >/dev/null 2>&1; then
+        if cores=$(nproc 2>/dev/null) && [ -n "$cores" ]; then
+            echo "$cores"
+            return 0
+        fi
+    fi
+
+    if cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null) && [ -n "$cores" ]; then
+        echo "$cores"
+        return 0
+    fi
+
+    echo "1"
+}
+
+if [ -z "${MAKEFLAGS:-}" ]; then
+    MAKEFLAGS="-j$(detect_core_count)"
+fi
 
 # --- Prerequisite validation ---
 # Maps a missing command to the Homebrew formula that provides it.
@@ -173,11 +193,8 @@ check_disk_space() {
 for arg in "$@"; do
     case $arg in
         --all)
-            BUILD_IOS=yes
-            BUILD_TVOS=yes
-            BUILD_VISIONOS=yes
-            BUILD_MACOS=yes
-            BUILD_CATALYST=yes
+            echo "Error: this fork only rebuilds iOS libVLC slices. Use '$0' or '$0 --ios-only'." >&2
+            exit 1
             ;;
         --ios-only)
             BUILD_IOS=yes
@@ -186,45 +203,9 @@ for arg in "$@"; do
             BUILD_MACOS=no
             BUILD_CATALYST=no
             ;;
-        --tvos)
-            BUILD_TVOS=yes
-            ;;
-        --visionos)
-            BUILD_VISIONOS=yes
-            ;;
-        --macos)
-            BUILD_MACOS=yes
-            ;;
-        --macos-only)
-            BUILD_IOS=no
-            BUILD_TVOS=no
-            BUILD_VISIONOS=no
-            BUILD_MACOS=yes
-            BUILD_CATALYST=no
-            ;;
-        --tvos-only)
-            BUILD_IOS=no
-            BUILD_TVOS=yes
-            BUILD_VISIONOS=no
-            BUILD_MACOS=no
-            BUILD_CATALYST=no
-            ;;
-        --visionos-only)
-            BUILD_IOS=no
-            BUILD_TVOS=no
-            BUILD_VISIONOS=yes
-            BUILD_MACOS=no
-            BUILD_CATALYST=no
-            ;;
-        --catalyst)
-            BUILD_CATALYST=yes
-            ;;
-        --catalyst-only)
-            BUILD_IOS=no
-            BUILD_TVOS=no
-            BUILD_VISIONOS=no
-            BUILD_MACOS=no
-            BUILD_CATALYST=yes
+        --tvos|--visionos|--macos|--catalyst|--tvos-only|--visionos-only|--macos-only|--catalyst-only)
+            echo "Error: this fork only rebuilds iOS libVLC slices; '${arg}' is unsupported." >&2
+            exit 1
             ;;
         --clean)
             echo "Removing build directory: ${BUILD_DIR}"
@@ -256,16 +237,7 @@ for arg in "$@"; do
 Usage: $0 [OPTIONS]
 
 Platform selection:
-  --all              Build for iOS, tvOS, visionOS, macOS, and Mac Catalyst
   --ios-only         iOS device + simulator only (default)
-  --macos-only       macOS only (fastest for development)
-  --tvos-only        tvOS device + simulator only
-  --visionos-only    visionOS device + simulator only
-  --catalyst-only    Mac Catalyst only
-  --tvos             Add tvOS to the build
-  --visionos         Add visionOS to the build
-  --macos            Add macOS to the build
-  --catalyst         Add Mac Catalyst to the build
 
 Build options:
   --clean            Remove the build directory and exit
@@ -278,10 +250,9 @@ Other:
 
 Examples:
   $0                          # Build for iOS (default)
-  $0 --macos-only             # Quick macOS build for development
-  $0 --all                    # Full build for all platforms
-  $0 --hash=abc123 --all      # Build all platforms from a specific commit
-  $0 --clean-build --all      # Fresh build for all platforms
+  $0 --ios-only               # Explicit iOS-only build
+  $0 --hash=abc123            # Build iOS from a specific commit
+  $0 --clean-build            # Fresh iOS build
 HELPEOF
             exit 0
             ;;
@@ -1236,7 +1207,7 @@ fi
 
 # --- Step 4: Create XCFramework ---
 if [ ${#XCFRAMEWORK_ARGS[@]} -eq 0 ]; then
-    error "No platforms were built. Use --macos, --ios-only, --tvos-only, --visionos-only, --catalyst-only, --tvos, --visionos, --macos, --catalyst, or --all"
+    error "No platforms were built. This fork only supports the default iOS build or --ios-only."
 fi
 
 info "Creating libvlc.xcframework..."
