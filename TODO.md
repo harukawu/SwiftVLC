@@ -21,12 +21,42 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
     `Package.swift`, and keep rebuilt framework artifacts as local/release
     assets rather than committed binaries.
 
-- `[ ]` T01 - Baseline artifact and script audit
+- `[x]` T01 - Baseline artifact and script audit
   - Record the current package platforms, binary target shape, generated
     artifact layout, and static archive assumptions.
   - Inspect the pinned VLC Apple build script for dynamic-library and
     LGPL/GPL-related options.
   - Update this TODO with the exact implementation decisions before editing.
+  - Audit result:
+    - `Package.swift` currently declares iOS, macOS, tvOS, visionOS, and Mac
+      Catalyst platforms and a single remote `libvlc` binary target. Per owner
+      decision, keep these platform declarations unchanged.
+    - `Vendor/` is absent in this checkout, ignored by Git, and has no tracked
+      files. Rebuilt frameworks remain local/release artifacts only.
+    - `scripts/build-libvlc.sh` currently packages
+      `static-lib/libvlc-full-static.a` into `libvlc.a` slices and creates the
+      xcframework with `-library ... -headers ...`; release/setup scripts also
+      contain static-archive assumptions.
+    - The pinned VLC Apple build script at `c833c4be0` explicitly documents its
+      default full-static mode, but already supports `--enable-shared`. In that
+      mode it adds `--enable-shared`, skips `--disable-shared --enable-static`,
+      runs `make install`, then exits before the static module-list and
+      `libvlc-full-static.a` steps.
+    - The pinned VLC Apple `build.conf` already passes `--disable-gpl` and
+      `--disable-gnuv3` to contrib bootstrap. This rebuild should preserve those
+      options, make the LGPL intent explicit in our wrapper script, and add
+      guardrails/scans rather than relying on implicit upstream defaults.
+  - Implementation decisions:
+    - `scripts/build-libvlc.sh` will become an iOS-only builder: default and
+      `--ios-only` remain valid, while non-iOS platform flags should fail with a
+      clear message.
+    - The build will invoke VLC's Apple script with `--enable-shared` for
+      iphoneos arm64 and iphonesimulator arm64/x86_64.
+    - Static archive collection, duplicate-symbol archive repair, `.a`
+      deployment-target scanning, and release stripping of `.a` files will be
+      replaced with dynamic-framework packaging and verification.
+    - The final local output remains `Vendor/libvlc.xcframework`, but it should
+      contain iOS framework slices, not static libraries.
 
 - `[ ]` T02 - Narrow the package and scripts to iOS
   - Remove or disable non-iOS platform selection in `scripts/build-libvlc.sh`.
