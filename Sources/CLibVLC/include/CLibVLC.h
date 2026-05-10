@@ -23,4 +23,14 @@ void *swiftvlc_log_set(libvlc_instance_t *instance,
 /// Unsets the log callback and frees the bridge context.
 void swiftvlc_log_unset(libvlc_instance_t *instance, void *context);
 
+/// Returns a newly allocated path to libvlc.framework's bundled plugins
+/// directory, or NULL if the framework/plugins directory cannot be found.
+/// The caller must free the returned pointer.
+char *swiftvlc_copy_bundled_plugins_path(void);
+
+/// Ensures libvlc.framework's bundled plugins directory is present in
+/// VLC_PLUGIN_PATH before libvlc_new() scans for dynamic modules.
+/// Returns 1 when a bundled path is available and 0 otherwise.
+int swiftvlc_prepare_bundled_plugins(void);
+
 #endif /* CLibVLC_h */

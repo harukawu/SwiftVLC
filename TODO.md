@@ -116,11 +116,27 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
       files, dynamic Mach-O file types, corrected plugin/core install names,
       and iOS deployment target `minos=18.0`.
 
-- `[ ]` T05 - Update Swift package integration
+- `[x]` T05 - Update Swift package integration
   - Point the local binary target at the rebuilt framework xcframework.
   - Adjust linker settings if dynamic frameworks remove or change explicit
     system framework/library requirements.
   - Confirm downstream iOS apps can embed the dynamic libVLC framework.
+  - Completed:
+    - Kept `Package.swift` in release `url + checksum` form per the
+      local/release-asset workflow; `scripts/setup-dev.sh --skip-download`
+      remains the local switch to `Vendor/libvlc.xcframework`.
+    - Updated `setup-dev.sh` to validate the local iOS dynamic framework
+      slices and reject packaged `.a` or `.la` files instead of running the
+      obsolete static duplicate-symbol repair.
+    - Added CLibVLC runtime helpers that locate
+      `libvlc.framework/plugins` via `dladdr()` and append it to
+      `VLC_PLUGIN_PATH` before `libvlc_new()` scans dynamic modules.
+    - `VLCInstance` now prepares the bundled plugin path before creating an
+      instance, including for custom argument lists that do not use
+      `defaultArguments`.
+    - Verified `bash -n scripts/setup-dev.sh` and `shim.c` syntax against the
+      iphoneos and iphonesimulator SDKs. Full simulator build/test coverage is
+      tracked in T07.
 
 - `[ ]` T06 - Add dynamic-linkage validation
   - Add script-level checks that fail if `.a` files are produced or packaged.

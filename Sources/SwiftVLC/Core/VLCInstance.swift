@@ -204,6 +204,7 @@ public final class VLCInstance: Sendable {
   /// - Throws: `VLCError.invalidInput` if too many arguments are supplied,
   ///   or `VLCError.instanceCreationFailed` if libVLC cannot be initialized.
   public init(arguments: [String] = VLCInstance.defaultArguments) throws(VLCError) {
+    _ = swiftvlc_prepare_bundled_plugins()
     self.arguments = arguments
     let argumentCount = try checkedInt32(arguments.count, parameter: "arguments.count")
 

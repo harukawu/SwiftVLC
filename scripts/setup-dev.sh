@@ -157,6 +157,37 @@ require_gh() {
   fi
 }
 
+verify_dynamic_xcframework() {
+  local missing=()
+  local slices=(
+    "ios-arm64"
+    "ios-arm64_x86_64-simulator"
+  )
+
+  for slice in "${slices[@]}"; do
+    local binary="$XCFW_DIR/$slice/libvlc.framework/libvlc"
+    if [[ ! -f "$binary" ]]; then
+      missing+=("$slice")
+      continue
+    fi
+    if ! file "$binary" | grep -q "dynamically linked shared library"; then
+      echo "Error: $binary is not a dynamic framework binary." >&2
+      file "$binary" >&2
+      exit 1
+    fi
+  done
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "Error: $XCFW_DIR is missing expected iOS slices: ${missing[*]}" >&2
+    exit 1
+  fi
+
+  if find "$XCFW_DIR" \( -name '*.a' -o -name '*.la' \) -print -quit | grep -q .; then
+    echo "Error: $XCFW_DIR contains static or libtool archive files." >&2
+    exit 1
+  fi
+}
+
 # ── Decide whether to download ────────────────────────────────────────────────
 
 if [[ "$SKIP_DOWNLOAD" == true ]]; then
@@ -193,13 +224,12 @@ else
     (cd Vendor && ditto -x -k "$ZIP_NAME" . && rm "$ZIP_NAME")
     echo "  Installed to $XCFW_DIR"
 
-    # Fix duplicate symbols (json_parse_error/json_read) in the static library.
-    # Two VLC plugins (ytdl, chromecast) each compile their own copy; the
-    # Apple linker in Xcode 16+ treats duplicates as errors on Mac Catalyst.
-    echo "Fixing duplicate symbols in static libraries..."
-    "$SCRIPT_DIR/fix-duplicate-symbols.sh" "$XCFW_DIR"
   fi
 fi
+
+echo "Verifying dynamic iOS xcframework..."
+verify_dynamic_xcframework
+echo "  Dynamic iOS framework slices are present."
 
 # ── Flip Package.swift to local path ──────────────────────────────────────────
 
