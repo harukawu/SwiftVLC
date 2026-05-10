@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-REPO="harflabs/SwiftVLC"
+REPO="${SWIFTVLC_GITHUB_REPO:-harukawu/SwiftVLC}"
 XCFW_PATH="Vendor/libvlc.xcframework"
 SHOWCASE_PROJECT="Showcase/SwiftVLCShowcase.xcodeproj/project.pbxproj"
 ZIP_NAME="libvlc.xcframework.zip"
@@ -142,13 +142,14 @@ PYEOF
 }
 
 switch_showcase_to_release_version() {
-  RELEASE_VERSION="$VERSION" SHOWCASE_PROJECT="$SHOWCASE_PROJECT" python3 - <<'PYEOF'
+  RELEASE_VERSION="$VERSION" RELEASE_REPO="$REPO" SHOWCASE_PROJECT="$SHOWCASE_PROJECT" python3 - <<'PYEOF'
 import os
 import re
 import sys
 import tempfile
 
 version = os.environ["RELEASE_VERSION"]
+repo = os.environ["RELEASE_REPO"]
 path = os.environ["SHOWCASE_PROJECT"]
 
 with open(path, "r") as f:
@@ -164,7 +165,7 @@ local_block = """/* Begin XCLocalSwiftPackageReference section */
 remote_block = f"""/* Begin XCRemoteSwiftPackageReference section */
 \t\tBA000001 /* XCRemoteSwiftPackageReference \"SwiftVLC\" */ = {{
 \t\t\tisa = XCRemoteSwiftPackageReference;
-\t\t\trepositoryURL = \"https://github.com/harflabs/SwiftVLC\";
+\t\t\trepositoryURL = \"https://github.com/{repo}\";
 \t\t\trequirement = {{
 \t\t\t\tkind = exactVersion;
 \t\t\t\tversion = {version};
@@ -176,7 +177,7 @@ remote_pattern = re.compile(
     r'/\* Begin XCRemoteSwiftPackageReference section \*/\n'
     r'\t\tBA000001 /\* XCRemoteSwiftPackageReference "SwiftVLC" \*/ = \{\n'
     r'\t\t\tisa = XCRemoteSwiftPackageReference;\n'
-    r'\t\t\trepositoryURL = "https://github.com/harflabs/SwiftVLC";\n'
+    r'\t\t\trepositoryURL = "https://github.com/[^"]+";\n'
     r'\t\t\trequirement = \{\n'
     r'\t\t\t\tkind = (?:upToNextMajorVersion|exactVersion);\n'
     r'\t\t\t\t(?:minimumVersion|version) = [0-9.]+;\n'
@@ -213,7 +214,7 @@ PYEOF
 # ── Preflight ─────────────────────────────────────────────────────────────────
 
 if [[ ! -d "$XCFW_PATH" ]]; then
-  echo "Error: $XCFW_PATH not found. Build it first: ./scripts/build-libvlc.sh --all" >&2
+  echo "Error: $XCFW_PATH not found. Build it first: ./scripts/build-libvlc.sh --ios-only" >&2
   exit 1
 fi
 

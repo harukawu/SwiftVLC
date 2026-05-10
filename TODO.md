@@ -184,12 +184,23 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
       display object; focused `VideoSurfaceRaceTests` and the full suite both
       passed with the rebuilt framework.
 
-- `[ ]` T08 - Update README for this fork
+- `[x]` T08 - Update README for this fork
   - Explain that this fork is iOS-only and rebuilds libVLC as dynamic frameworks.
   - Document prerequisites, build commands, expected output layout, and test
     commands.
   - State SwiftVLC's license, libVLC's LGPL license, VideoLAN attribution, and
     the GPL-removal intent clearly.
+  - Completed:
+    - README now calls out this fork's iOS-only dynamic framework artifact,
+      LGPL-oriented GPL/GNUv3 guardrails, local/release asset workflow, expected
+      `Vendor/libvlc.xcframework` layout, simulator test command, and release
+      process.
+    - License section now separates SwiftVLC's MIT-licensed wrapper code from
+      VideoLAN/libVLC licensing and points readers to VLC notices plus the final
+      GPL scan before app publication.
+    - `setup-dev.sh` and `release.sh` now default GitHub release operations to
+      `harukawu/SwiftVLC`, with `SWIFTVLC_GITHUB_REPO=owner/repo` available as
+      an override.
 
 - `[ ]` T09 - Final GPL and packaging scan
   - Scan scripts and patched VLC source configuration for GPL-enabling options.

@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-REPO="harflabs/SwiftVLC"
+REPO="${SWIFTVLC_GITHUB_REPO:-harukawu/SwiftVLC}"
 XCFW_DIR="Vendor/libvlc.xcframework"
 SHOWCASE_PROJECT="Showcase/SwiftVLCShowcase.xcodeproj/project.pbxproj"
 ZIP_NAME="libvlc.xcframework.zip"
@@ -109,7 +109,7 @@ remote_pattern = re.compile(
     r'/\* Begin XCRemoteSwiftPackageReference section \*/\n'
     r'\t\tBA000001 /\* XCRemoteSwiftPackageReference "SwiftVLC" \*/ = \{\n'
     r'\t\t\tisa = XCRemoteSwiftPackageReference;\n'
-    r'\t\t\trepositoryURL = "https://github.com/harflabs/SwiftVLC";\n'
+    r'\t\t\trepositoryURL = "https://github.com/[^"]+";\n'
     r'\t\t\trequirement = \{\n'
     r'\t\t\t\tkind = (?:upToNextMajorVersion|exactVersion);\n'
     r'\t\t\t\t(?:minimumVersion|version) = [0-9.]+;\n'
