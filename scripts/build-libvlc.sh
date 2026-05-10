@@ -895,6 +895,108 @@ PYEOF
 
 patch_vlc_deployment_targets
 
+ensure_vlc_lgpl_contrib_options() {
+    local BUILD_CONF="${VLC_SRC}/extras/package/apple/build.conf"
+
+    info "Ensuring VLC contrib options stay LGPL-oriented..."
+
+    python3 - "$BUILD_CONF" << 'PYEOF'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+content = path.read_text()
+
+required = [
+    "--disable-gpl",
+    "--disable-gnuv3",
+    "--disable-dvdcss",
+    "--disable-libdvdcss",
+    "--disable-dvdread",
+    "--disable-dvdnav",
+    "--disable-x264",
+    "--disable-x265",
+    "--disable-faad",
+    "--disable-faad2",
+    "--disable-dca",
+    "--disable-libdca",
+    "--disable-mpeg2",
+    "--disable-libmpeg2",
+    "--disable-postproc",
+]
+
+needle = "export VLC_CONTRIB_OPTIONS_BASE=(\n"
+if needle not in content:
+    raise SystemExit("VLC_CONTRIB_OPTIONS_BASE block not found - VLC build.conf shape changed")
+
+start = content.index(needle) + len(needle)
+end = content.index(")", start)
+base_block = content[start:end]
+missing = [option for option in required if option not in base_block]
+if not missing:
+    print("LGPL contrib options already present")
+    raise SystemExit(0)
+
+insert = "".join(f"    {option}\n" for option in missing)
+content = content[:start] + insert + content[start:]
+path.write_text(content)
+print("Inserted LGPL contrib options: " + ", ".join(missing))
+PYEOF
+
+    info "VLC contrib LGPL options ensured"
+}
+
+ensure_vlc_lgpl_contrib_options
+
+verify_vlc_lgpl_configuration() {
+    local BUILD_CONF="${VLC_SRC}/extras/package/apple/build.conf"
+    local required_options=(
+        --disable-gpl
+        --disable-gnuv3
+        --disable-dvdcss
+        --disable-libdvdcss
+        --disable-dvdread
+        --disable-dvdnav
+        --disable-x264
+        --disable-x265
+        --disable-faad
+        --disable-faad2
+        --disable-dca
+        --disable-libdca
+        --disable-mpeg2
+        --disable-libmpeg2
+        --disable-postproc
+    )
+    local option
+
+    info "Verifying VLC GPL exclusion options..."
+
+    local base_block
+    base_block=$(awk '
+        /^export VLC_CONTRIB_OPTIONS_BASE=\(/ { in_base = 1 }
+        in_base { print }
+        in_base && /^\)/ { exit }
+    ' "$BUILD_CONF")
+
+    if [ -z "$base_block" ]; then
+        error "VLC_CONTRIB_OPTIONS_BASE block not found in VLC build.conf."
+    fi
+
+    for option in "${required_options[@]}"; do
+        if ! grep -qF -- "$option" <<< "$base_block"; then
+            error "Required LGPL-oriented contrib option missing from VLC build.conf: $option"
+        fi
+    done
+
+    if grep -En -- '--enable-(gpl|gnuv3|dvdcss|libdvdcss|dvdread|dvdnav|x264|x265|faad|faad2|dca|libdca|mpeg2|libmpeg2|postproc)([^A-Za-z0-9_-]|$)' "$BUILD_CONF"; then
+        error "VLC build.conf contains a prohibited GPL-oriented enable option."
+    fi
+
+    info "VLC GPL exclusion options verified"
+}
+
+verify_vlc_lgpl_configuration
+
 # --- Step 1f: Force libtool --tag=CC for Objective-C convenience library ---
 # VLC's src/Makefile.am builds libvlccore_objc.la from .m files, but doesn't
 # tell libtool which tag to use. On libtool 2.5+ (current Homebrew), libtool

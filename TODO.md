@@ -78,11 +78,21 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
     - `scripts/build-libvlc.sh --help` and unsupported platform flags now reach
       argument handling even when CPU-count probing is restricted.
 
-- `[ ]` T03 - Make the libVLC build explicitly LGPL-oriented
+- `[x]` T03 - Make the libVLC build explicitly LGPL-oriented
   - Add explicit build configuration for LGPL mode if supported by VLC's build
     system.
   - Disable or exclude GPL-only modules and contribs discovered during T01.
   - Add guardrails so accidental GPL-enabling options fail the build visibly.
+  - Completed:
+    - Added an idempotent VLC `build.conf` patch that ensures the base contrib
+      options contain `--disable-gpl`, `--disable-gnuv3`, and explicit disables
+      for common GPL-only or GPL-sensitive contribs such as dvdcss/dvdread,
+      x264/x265, faad, dca, mpeg2, and postproc.
+    - Added a verifier that fails the build if those required options are
+      missing from `VLC_CONTRIB_OPTIONS_BASE` or if prohibited GPL-oriented
+      `--enable-*` options appear in the VLC Apple build config.
+    - Verified `scripts/build-libvlc.sh` syntax and help output after adding the
+      guardrails.
 
 - `[ ]` T04 - Build iOS dynamic framework slices
   - Replace static archive collection with dynamic framework assembly for iOS
