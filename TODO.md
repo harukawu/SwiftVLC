@@ -158,11 +158,31 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
       `./scripts/release.sh 0.0.0 --dry-run` (zip size 115 MB, checksum
       `82185963ed07dfb1261b04949d501282e0b60f13976a134d4743f7ddf20a130e`).
 
-- `[ ]` T07 - Run and adapt the Swift Testing suite
+- `[x]` T07 - Run and adapt the Swift Testing suite
   - Run the existing SwiftVLC tests against the rebuilt artifact.
   - If `swift test` is no longer the correct iOS-only command, document and use
     the reproducible iOS simulator test command.
   - Add tests only where dynamic packaging creates uncovered behavior.
+  - Completed:
+    - Used a temporary local package pointing at the ignored
+      `Vendor/libvlc.xcframework` and ran the iOS simulator suite with
+      `xcodebuild -scheme SwiftVLC -destination 'platform=iOS Simulator,id=456344A1-4FFE-47AB-9B0E-DF4B1EB56C7E' -derivedDataPath /private/tmp/SwiftVLC-T07.REIsk2/DerivedData-patched-race-sync -skipPackagePluginValidation -skipMacroValidation test`.
+    - Full result: 1,362 tests in 109 suites passed after 176.049 seconds;
+      `xcodebuild` reported `** TEST SUCCEEDED **`.
+    - Added iOS-only coverage that the dynamic bundled plugin path is
+      discoverable and that stale `.build-libvlc` plugin paths are sanitized
+      out of `VLC_PLUGIN_PATH`; `VLC_LIB_PATH` now points at the bundled
+      `libvlc.framework/plugins` directory.
+    - Stabilized real-audio pause/stop teardown by deferring native pause until
+      libVLC timing is ready, while allowing `--no-audio` test instances to
+      keep issuing early native pauses.
+    - Added an iOS compile guard for the AppKit-only PiP probe view and a drain
+      in the audio-output race test so deferred releases finish before the next
+      real-audio coverage.
+    - Patched VLC's iOS sample-buffer display setup during the libVLC build so
+      setup completes on the main queue before vout teardown can free the
+      display object; focused `VideoSurfaceRaceTests` and the full suite both
+      passed with the rebuilt framework.
 
 - `[ ]` T08 - Update README for this fork
   - Explain that this fork is iOS-only and rebuilds libVLC as dynamic frameworks.

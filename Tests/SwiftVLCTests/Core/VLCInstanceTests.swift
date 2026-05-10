@@ -145,6 +145,46 @@ extension Integration {
       #expect(isDirectory.boolValue)
       #expect(path.hasSuffix("/libvlc.framework/plugins"))
     }
+
+    @Test
+    func `Bundled dynamic plugins path replaces stale build tree paths on iOS`() throws {
+      let previousPath = getenv("VLC_PLUGIN_PATH").map { String(cString: $0) }
+      let previousLibPath = getenv("VLC_LIB_PATH").map { String(cString: $0) }
+      defer {
+        if let previousPath {
+          setenv("VLC_PLUGIN_PATH", previousPath, 1)
+        } else {
+          unsetenv("VLC_PLUGIN_PATH")
+        }
+        if let previousLibPath {
+          setenv("VLC_LIB_PATH", previousLibPath, 1)
+        } else {
+          unsetenv("VLC_LIB_PATH")
+        }
+      }
+
+      setenv(
+        "VLC_PLUGIN_PATH",
+        "/tmp/SwiftVLC/scripts/.build-libvlc/vlc/build-iphonesimulator-arm64/lib/vlc/plugins",
+        1
+      )
+      setenv(
+        "VLC_LIB_PATH",
+        "/tmp/SwiftVLC/scripts/.build-libvlc/vlc/build-iphonesimulator-arm64/lib/vlc/plugins",
+        1
+      )
+
+      #expect(swiftvlc_prepare_bundled_plugins() == 1)
+      let preparedPath = String(cString: try #require(getenv("VLC_PLUGIN_PATH")))
+      let preparedLibPath = String(cString: try #require(getenv("VLC_LIB_PATH")))
+      let cPath = try #require(swiftvlc_copy_bundled_plugins_path())
+      defer { Darwin.free(cPath) }
+      let bundledPath = String(cString: cPath)
+
+      #expect(preparedPath.split(separator: ":").first.map(String.init) == bundledPath)
+      #expect(!preparedPath.contains(".build-libvlc"))
+      #expect(preparedLibPath == bundledPath)
+    }
     #endif
 
     #if os(macOS)

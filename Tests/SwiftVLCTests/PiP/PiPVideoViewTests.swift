@@ -511,6 +511,7 @@ private final class Box<T> {
   }
 }
 
+#if canImport(AppKit)
 @MainActor
 private final class PiPReshapeProbeView: NSView {
   var reshapeCount = 0
@@ -520,4 +521,5 @@ private final class PiPReshapeProbeView: NSView {
     reshapeCount += 1
   }
 }
+#endif
 #endif

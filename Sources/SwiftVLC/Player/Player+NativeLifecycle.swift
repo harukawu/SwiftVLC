@@ -21,6 +21,8 @@ extension Player {
     _ nativePlayer: OpaquePointer,
     resumeBeforeStop: Bool
   ) {
+    // Resume only from an observed native pause. Issuing a resume while
+    // libVLC is still entering pause can trip its aout timing assertion.
     if resumeBeforeStop || PlayerState(from: libvlc_media_player_get_state(nativePlayer)) == .paused {
       libvlc_media_player_set_pause(nativePlayer, 0)
     }

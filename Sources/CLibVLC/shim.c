@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,26 +73,75 @@ static int swiftvlc_is_directory(const char *path) {
 
 static pthread_mutex_t swiftvlc_plugin_path_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static int swiftvlc_path_list_contains(const char *list, const char *path) {
-    if (!list || !path || path[0] == '\0') {
+static int swiftvlc_segment_equals_path(const char *segment, size_t segment_len,
+                                         const char *path) {
+    size_t path_len = strlen(path);
+    return segment_len == path_len && strncmp(segment, path, path_len) == 0;
+}
+
+static int swiftvlc_is_build_tree_plugin_path(const char *path) {
+    return path && strstr(path, "/.build-libvlc/") != NULL;
+}
+
+static int swiftvlc_append_plugin_path(char **list, size_t *list_len,
+                                       const char *path) {
+    size_t path_len = strlen(path);
+    if (path_len > SIZE_MAX - *list_len - 2) {
         return 0;
     }
 
-    size_t path_len = strlen(path);
-    const char *cursor = list;
+    size_t new_len = *list_len + 1 + path_len;
+    char *expanded = realloc(*list, new_len + 1);
+    if (!expanded) {
+        return 0;
+    }
+
+    expanded[*list_len] = ':';
+    memcpy(expanded + *list_len + 1, path, path_len + 1);
+    *list = expanded;
+    *list_len = new_len;
+    return 1;
+}
+
+static char *swiftvlc_copy_plugin_path_list(const char *plugins_path,
+                                            const char *existing) {
+    char *combined = strdup(plugins_path);
+    if (!combined) {
+        return NULL;
+    }
+
+    size_t combined_len = strlen(combined);
+    if (!existing || existing[0] == '\0') {
+        return combined;
+    }
+
+    const char *cursor = existing;
     while (*cursor) {
         const char *separator = strchr(cursor, ':');
         size_t segment_len = separator ? (size_t)(separator - cursor) : strlen(cursor);
-        if (segment_len == path_len && strncmp(cursor, path, path_len) == 0) {
-            return 1;
+
+        if (segment_len > 0 &&
+            !swiftvlc_segment_equals_path(cursor, segment_len, plugins_path) &&
+            segment_len < PATH_MAX) {
+            char segment[PATH_MAX];
+            memcpy(segment, cursor, segment_len);
+            segment[segment_len] = '\0';
+
+            if (swiftvlc_is_directory(segment) &&
+                !swiftvlc_is_build_tree_plugin_path(segment) &&
+                !swiftvlc_append_plugin_path(&combined, &combined_len, segment)) {
+                free(combined);
+                return NULL;
+            }
         }
+
         if (!separator) {
             break;
         }
         cursor = separator + 1;
     }
 
-    return 0;
+    return combined;
 }
 
 char *swiftvlc_copy_bundled_plugins_path(void) {
@@ -138,28 +188,17 @@ int swiftvlc_prepare_bundled_plugins(void) {
 
     pthread_mutex_lock(&swiftvlc_plugin_path_mutex);
 
-    int result = 0;
     const char *existing = getenv("VLC_PLUGIN_PATH");
-    if (!existing || existing[0] == '\0') {
-        result = setenv("VLC_PLUGIN_PATH", plugins_path, 1) == 0 ? 1 : 0;
-        goto done;
-    }
-
-    if (swiftvlc_path_list_contains(existing, plugins_path)) {
-        result = 1;
-        goto done;
-    }
-
-    size_t existing_len = strlen(existing);
-    size_t plugins_len = strlen(plugins_path);
-    size_t combined_len = existing_len + 1 + plugins_len + 1;
-    char *combined = malloc(combined_len);
+    char *combined = swiftvlc_copy_plugin_path_list(plugins_path, existing);
+    int result = 0;
     if (!combined) {
         goto done;
     }
 
-    snprintf(combined, combined_len, "%s:%s", existing, plugins_path);
-    result = setenv("VLC_PLUGIN_PATH", combined, 1) == 0 ? 1 : 0;
+    if (setenv("VLC_LIB_PATH", plugins_path, 1) == 0 &&
+        setenv("VLC_PLUGIN_PATH", combined, 1) == 0) {
+        result = 1;
+    }
     free(combined);
 
 done:

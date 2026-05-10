@@ -670,12 +670,488 @@ PYEOF
 
 patch_vlc_snapshot_filter_owner
 
-# --- Step 1d: Patch VLC for Mac Catalyst support ---
+# --- Step 1d: Patch VLC iOS sample-buffer display teardown ---
+# VLC's sample-buffer video output posts its view setup to the main queue, but
+# vout teardown can free the display object before that block runs. Dynamic iOS
+# frameworks make this race visible in fast attach/play/detach tests. Mark the
+# vout unavailable during close, retain the setup inputs, and make display setup
+# finish on the main queue before returning from prepareDisplay.
+patch_vlc_sample_buffer_display_teardown() {
+    local SBD_PATH="${VLC_SRC}/modules/video_output/apple/VLCSampleBufferDisplay.m"
+
+    if grep -q 'SwiftVLC: make display setup finish before vout teardown' "$SBD_PATH"; then
+        info "VLC sample-buffer display teardown race already patched"
+        return 0
+    fi
+
+    info "Patching VLC sample-buffer display teardown race..."
+
+    python3 - "$SBD_PATH" << 'PYEOF'
+import sys
+
+path = sys.argv[1]
+with open(path, 'r') as f:
+    content = f.read()
+
+needle = '''- (void)prepareDisplay {
+    @synchronized(_displayLayer) {
+        if (_displayLayer)
+            return;
+    }
+
+    VLCSampleBufferDisplay *sys = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (sys.displayView)
+            return;
+
+        VLCSampleBufferDisplayView *displayView;
+        VLCSampleBufferSubpictureView *spuView;
+        VLCView *window = sys.window;
+
+        displayView =
+            [[VLCSampleBufferDisplayView alloc] initWithVoutDisplay:sys.vd];
+        spuView = [VLCSampleBufferSubpictureView new];
+        [window addSubview:displayView];
+        [window addSubview:spuView];
+        [displayView setFrame:[window bounds]];
+        [spuView setFrame:[window bounds]];
+
+        sys->place = *sys.vd->place;
+
+        sys.displayView = displayView;
+        sys.spuView = spuView;
+        @synchronized(sys.displayLayer) {
+            sys.displayLayer = displayView.displayLayer;
+        }
+        [sys preparePictureInPicture];
+    });
+}
+
+- (void)close {
+    VLCSampleBufferDisplay *sys = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [sys.displayView removeFromSuperview];
+        [sys.spuView removeFromSuperview];
+    });
+    DeletePipController(_pipcontroller);
+    _pipcontroller = NULL;
+}
+'''
+
+owner_patch = '''- (void)prepareDisplay {
+    @synchronized(_displayLayer) {
+        if (_displayLayer)
+            return;
+    }
+
+    VLCSampleBufferDisplay *sys = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @synchronized(sys) {
+            if (sys.displayView)
+                return;
+
+            VLCSampleBufferDisplayView *displayView;
+            VLCSampleBufferSubpictureView *spuView;
+            VLCView *window = sys.window;
+            vout_display_t *vd = sys.vd;
+
+            // SwiftVLC: display setup may race vout teardown. If Close()
+            // already marked the vout unavailable, the queued main-queue
+            // setup block must not dereference vout-owned pointers.
+            if (!window || !vd || !vd->place)
+                return;
+
+            displayView =
+                [[VLCSampleBufferDisplayView alloc] initWithVoutDisplay:vd];
+            spuView = [VLCSampleBufferSubpictureView new];
+            [window addSubview:displayView];
+            [window addSubview:spuView];
+            [displayView setFrame:[window bounds]];
+            [spuView setFrame:[window bounds]];
+
+            sys->place = *vd->place;
+
+            sys.displayView = displayView;
+            sys.spuView = spuView;
+            @synchronized(sys.displayLayer) {
+                sys.displayLayer = displayView.displayLayer;
+            }
+            [sys preparePictureInPicture];
+        }
+    });
+}
+
+- (void)close {
+    VLCSampleBufferDisplay *sys = self;
+    pip_controller_t *pipcontroller;
+    @synchronized(self) {
+        _vd = NULL;
+        pipcontroller = _pipcontroller;
+        _pipcontroller = NULL;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [sys.displayView removeFromSuperview];
+        [sys.spuView removeFromSuperview];
+        sys.displayView = nil;
+        sys.spuView = nil;
+        @synchronized(sys.displayLayer) {
+            sys.displayLayer = nil;
+        }
+    });
+    DeletePipController(pipcontroller);
+}
+'''
+
+first_patch = owner_patch
+
+snapshot_patch = '''- (void)prepareDisplay {
+    @synchronized(_displayLayer) {
+        if (_displayLayer)
+            return;
+    }
+
+    VLCSampleBufferDisplay *sys = self;
+    VLCView *window = self.window;
+    vout_display_place_t place;
+
+    @synchronized(sys) {
+        vout_display_t *vd = sys.vd;
+
+        // SwiftVLC: snapshot vout placement before main-queue display setup.
+        // The queued block may run after vout teardown has started, so it must
+        // retain the drawable view and avoid vout-owned pointers.
+        if (!window || !vd || !vd->place)
+            return;
+
+        place = *vd->place;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @synchronized(sys) {
+            if (sys.displayView || !sys.vd)
+                return;
+
+            VLCSampleBufferDisplayView *displayView;
+            VLCSampleBufferSubpictureView *spuView;
+
+            displayView =
+                [[VLCSampleBufferDisplayView alloc] initWithVoutDisplay:NULL];
+            spuView = [VLCSampleBufferSubpictureView new];
+            [window addSubview:displayView];
+            [window addSubview:spuView];
+            [displayView setFrame:[window bounds]];
+            [spuView setFrame:[window bounds]];
+
+            sys->place = place;
+
+            sys.displayView = displayView;
+            sys.spuView = spuView;
+            @synchronized(sys.displayLayer) {
+                sys.displayLayer = displayView.displayLayer;
+            }
+            [sys preparePictureInPicture];
+        }
+    });
+}
+
+- (void)close {
+    VLCSampleBufferDisplay *sys = self;
+    pip_controller_t *pipcontroller;
+    @synchronized(self) {
+        _vd = NULL;
+        pipcontroller = _pipcontroller;
+        _pipcontroller = NULL;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [sys.displayView removeFromSuperview];
+        [sys.spuView removeFromSuperview];
+        sys.displayView = nil;
+        sys.spuView = nil;
+        @synchronized(sys.displayLayer) {
+            sys.displayLayer = nil;
+        }
+    });
+    DeletePipController(pipcontroller);
+}
+'''
+
+retain_patch = '''- (void)prepareDisplay {
+    @synchronized(_displayLayer) {
+        if (_displayLayer)
+            return;
+    }
+
+#if __has_feature(objc_arc)
+    VLCSampleBufferDisplay *sys = self;
+    VLCView *window = self.window;
+#else
+    VLCSampleBufferDisplay *sys = [self retain];
+    VLCView *window = [self.window retain];
+#endif
+    vout_display_place_t displayPlace;
+
+    @synchronized(sys) {
+        vout_display_t *vd = sys.vd;
+
+        // SwiftVLC: retain display owner until main-queue setup drains.
+        // The queued block may run after vout teardown has started, so it must
+        // retain the drawable view and avoid vout-owned pointers.
+        if (!window || !vd || !vd->place) {
+#if !__has_feature(objc_arc)
+            [window release];
+            [sys release];
+#endif
+            return;
+        }
+
+        displayPlace = *vd->place;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @synchronized(sys) {
+            if (!sys.displayView && sys.vd) {
+                VLCSampleBufferDisplayView *displayView;
+                VLCSampleBufferSubpictureView *spuView;
+
+                displayView =
+                    [[VLCSampleBufferDisplayView alloc] initWithVoutDisplay:NULL];
+                spuView = [VLCSampleBufferSubpictureView new];
+                [window addSubview:displayView];
+                [window addSubview:spuView];
+                [displayView setFrame:[window bounds]];
+                [spuView setFrame:[window bounds]];
+
+                sys->place = displayPlace;
+
+                sys.displayView = displayView;
+                sys.spuView = spuView;
+                @synchronized(sys.displayLayer) {
+                    sys.displayLayer = displayView.displayLayer;
+                }
+                [sys preparePictureInPicture];
+            }
+        }
+#if !__has_feature(objc_arc)
+        [window release];
+        [sys release];
+#endif
+    });
+}
+
+- (void)close {
+    VLCSampleBufferDisplay *sys = self;
+    pip_controller_t *pipcontroller;
+    @synchronized(self) {
+        _vd = NULL;
+        pipcontroller = _pipcontroller;
+        _pipcontroller = NULL;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [sys.displayView removeFromSuperview];
+        [sys.spuView removeFromSuperview];
+        sys.displayView = nil;
+        sys.spuView = nil;
+        @synchronized(sys.displayLayer) {
+            sys.displayLayer = nil;
+        }
+    });
+    DeletePipController(pipcontroller);
+}
+'''
+
+async_retain_patch = '''- (void)prepareDisplay {
+    @synchronized(_displayLayer) {
+        if (_displayLayer)
+            return;
+    }
+
+    VLCView *window = self.window;
+    vout_display_place_t displayPlace;
+
+    @synchronized(self) {
+        vout_display_t *vd = _vd;
+
+        // SwiftVLC: keep queued display setup independent of vout teardown.
+        // Close() clears _vd before releasing vout-owned memory. Snapshot the
+        // placement and retain ObjC inputs explicitly so the queued main block
+        // never calls through a stale vout pointer.
+        if (!window || !vd || !vd->place)
+            return;
+
+        displayPlace = *vd->place;
+    }
+
+    CFTypeRef retainedSys = CFRetain((__bridge CFTypeRef)self);
+    CFTypeRef retainedWindow = CFRetain((__bridge CFTypeRef)window);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        VLCSampleBufferDisplay *sys = (__bridge VLCSampleBufferDisplay *)retainedSys;
+        VLCView *window = (__bridge VLCView *)retainedWindow;
+
+        @synchronized(sys) {
+            if (!sys->_displayView && sys->_vd) {
+                VLCSampleBufferDisplayView *displayView;
+                VLCSampleBufferSubpictureView *spuView;
+
+                displayView =
+                    [[VLCSampleBufferDisplayView alloc] initWithVoutDisplay:NULL];
+                spuView = [VLCSampleBufferSubpictureView new];
+                [window addSubview:displayView];
+                [window addSubview:spuView];
+                [displayView setFrame:[window bounds]];
+                [spuView setFrame:[window bounds]];
+
+                sys->place = displayPlace;
+
+                sys.displayView = displayView;
+                sys.spuView = spuView;
+                @synchronized(sys.displayLayer) {
+                    sys.displayLayer = displayView.displayLayer;
+                }
+                [sys preparePictureInPicture];
+            }
+        }
+
+        CFRelease(retainedWindow);
+        CFRelease(retainedSys);
+    });
+}
+
+- (void)close {
+    CFTypeRef retainedSys = CFRetain((__bridge CFTypeRef)self);
+    pip_controller_t *pipcontroller;
+    @synchronized(self) {
+        _vd = NULL;
+        pipcontroller = _pipcontroller;
+        _pipcontroller = NULL;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        VLCSampleBufferDisplay *sys = (__bridge VLCSampleBufferDisplay *)retainedSys;
+
+        [sys.displayView removeFromSuperview];
+        [sys.spuView removeFromSuperview];
+        sys.displayView = nil;
+        sys.spuView = nil;
+        @synchronized(sys.displayLayer) {
+            sys.displayLayer = nil;
+        }
+
+        CFRelease(retainedSys);
+    });
+    DeletePipController(pipcontroller);
+}
+'''
+
+replacement = '''- (void)prepareDisplay {
+    @synchronized(_displayLayer) {
+        if (_displayLayer)
+            return;
+    }
+
+    VLCView *window = self.window;
+    vout_display_place_t displayPlace;
+
+    @synchronized(self) {
+        vout_display_t *vd = _vd;
+
+        // SwiftVLC: make display setup finish before vout teardown.
+        // Snapshot placement and retain ObjC inputs so main-queue setup never
+        // calls through a stale vout pointer.
+        if (!window || !vd || !vd->place)
+            return;
+
+        displayPlace = *vd->place;
+    }
+
+    CFTypeRef retainedSys = CFRetain((__bridge CFTypeRef)self);
+    CFTypeRef retainedWindow = CFRetain((__bridge CFTypeRef)window);
+    dispatch_block_t setupDisplay = ^{
+        VLCSampleBufferDisplay *sys = (__bridge VLCSampleBufferDisplay *)retainedSys;
+        VLCView *window = (__bridge VLCView *)retainedWindow;
+
+        @synchronized(sys) {
+            if (!sys->_displayView && sys->_vd) {
+                VLCSampleBufferDisplayView *displayView;
+                VLCSampleBufferSubpictureView *spuView;
+
+                displayView =
+                    [[VLCSampleBufferDisplayView alloc] initWithVoutDisplay:NULL];
+                spuView = [VLCSampleBufferSubpictureView new];
+                [window addSubview:displayView];
+                [window addSubview:spuView];
+                [displayView setFrame:[window bounds]];
+                [spuView setFrame:[window bounds]];
+
+                sys->place = displayPlace;
+
+                sys.displayView = displayView;
+                sys.spuView = spuView;
+                @synchronized(sys.displayLayer) {
+                    sys.displayLayer = displayView.displayLayer;
+                }
+                [sys preparePictureInPicture];
+            }
+        }
+
+        CFRelease(retainedWindow);
+        CFRelease(retainedSys);
+    };
+
+    if ([NSThread isMainThread])
+        setupDisplay();
+    else
+        dispatch_sync(dispatch_get_main_queue(), setupDisplay);
+}
+
+- (void)close {
+    CFTypeRef retainedSys = CFRetain((__bridge CFTypeRef)self);
+    pip_controller_t *pipcontroller;
+    @synchronized(self) {
+        _vd = NULL;
+        pipcontroller = _pipcontroller;
+        _pipcontroller = NULL;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        VLCSampleBufferDisplay *sys = (__bridge VLCSampleBufferDisplay *)retainedSys;
+
+        [sys.displayView removeFromSuperview];
+        [sys.spuView removeFromSuperview];
+        sys.displayView = nil;
+        sys.spuView = nil;
+        @synchronized(sys.displayLayer) {
+            sys.displayLayer = nil;
+        }
+
+        CFRelease(retainedSys);
+    });
+    DeletePipController(pipcontroller);
+}
+'''
+
+for candidate in (async_retain_patch, retain_patch, snapshot_patch, first_patch, needle):
+    if candidate in content:
+        content = content.replace(candidate, replacement, 1)
+        break
+else:
+    raise SystemExit('VLCSampleBufferDisplay prepareDisplay/close block not found - VLC source shape changed')
+
+with open(path, 'w') as f:
+    f.write(content)
+
+print('Sample-buffer display teardown patched successfully')
+PYEOF
+
+    info "VLC sample-buffer display teardown race patched"
+}
+
+patch_vlc_sample_buffer_display_teardown
+
+# --- Step 1e: Patch VLC for Mac Catalyst support ---
 if [ "$BUILD_CATALYST" = "yes" ]; then
     patch_vlc_for_catalyst
 fi
 
-# --- Step 1e: Patch LDFLAGS to include -isysroot ---
+# --- Step 1f: Patch LDFLAGS to include -isysroot ---
 # On Xcode 26+, the linker requires an explicit -isysroot
 # to find system libraries (libSystem, etc.). VLC's build.sh omits this from
 # LDFLAGS, causing FFmpeg's configure (and others) to fail with:

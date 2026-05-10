@@ -17,16 +17,16 @@ extension Player {
   /// libVLC's audio-output state machine.
   ///
   /// With a real audio output, libVLC can report `.playing` and
-  /// pausable before the first audio timestamp has cleared zero. Pausing
-  /// in that window leaves the aout stream with a stale pause date and
-  /// the next audio block trips libVLC's debug assertion. When audio
-  /// is disabled or not initialized, libVLC reports a negative volume
-  /// sentinel and no aout stream participates in that assertion.
+  /// pausable before the audio-output timing pipeline has cleared its
+  /// first few ticks. Pausing in that window leaves the aout stream with
+  /// a stale pause date and the next audio block trips libVLC's debug
+  /// assertion. When audio is explicitly disabled, no aout stream
+  /// participates in that assertion.
   var canIssueNativePause: Bool {
-    if libvlc_media_player_get_time(pointer) > 0 {
+    if instance.disablesNativeAudioOutput {
       return true
     }
-    return libvlc_audio_get_volume(pointer) < 0
+    return libvlc_media_player_get_time(pointer) >= 50
   }
 
   // MARK: - Event consumer task

@@ -421,7 +421,7 @@ public final class Player {
       drawable.map { retainedDrawablesUntilNativePlayerRelease + [$0] }
         ?? retainedDrawablesUntilNativePlayerRelease
     nonisolated(unsafe) let p = pointer
-    let resumeBeforeRelease = pauseTransition == .pausing || nativePlaybackState == .paused
+    let resumeBeforeRelease = nativePlaybackState == .paused
     DispatchQueue.global(qos: .utility).async {
       bridge.invalidate()
       Self.stopNativePlayerBeforeRelease(p, resumeBeforeStop: resumeBeforeRelease)
@@ -600,7 +600,7 @@ public final class Player {
   ///   cannot be applied to a replacement native player.
   public func play(_ media: sending Media) throws(VLCError) {
     if shouldReplaceNativePlayerBeforePlaybackLoad {
-      let resumeBeforeRelease = pauseTransition == .pausing || nativePlaybackState == .paused
+      let resumeBeforeRelease = nativePlaybackState == .paused
       currentMedia = media
       resetMediaDerivedState()
       try replaceNativePlayerForDrawablePlayback(
@@ -774,7 +774,7 @@ public final class Player {
 
   /// Stops playback asynchronously.
   public func stop() {
-    if pauseTransition == .pausing || nativePlaybackState == .paused {
+    if nativePlaybackState == .paused {
       libvlc_media_player_set_pause(pointer, 0)
     }
     pauseTransition = nil

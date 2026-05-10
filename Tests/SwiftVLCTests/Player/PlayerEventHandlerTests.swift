@@ -178,11 +178,15 @@ extension Integration {
     }
 
     @Test
-    func `canIssueNativePause is false before native playback has advanced`() {
+    func `canIssueNativePause before native playback is gated by audio output mode`() throws {
       let player = Player(instance: TestInstance.shared)
 
       #expect(libvlc_media_player_get_time(player.pointer) <= 0)
-      #expect(player.canIssueNativePause == false)
+      #expect(player.canIssueNativePause)
+
+      let audioPlayer = try Player(instance: VLCInstance(arguments: ["--quiet"]))
+      #expect(libvlc_media_player_get_time(audioPlayer.pointer) <= 0)
+      #expect(!audioPlayer.canIssueNativePause)
     }
 
     @Test

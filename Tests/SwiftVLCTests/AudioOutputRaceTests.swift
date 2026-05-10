@@ -38,7 +38,7 @@ extension Integration {
     // MARK: - a) play → immediately drop (no stop, no wait)
 
     @Test(.enabled(if: TestCondition.canPlayMedia), .timeLimit(.minutes(1)))
-    func `play then immediately drop racing aout open`() throws {
+    func `play then immediately drop racing aout open`() async throws {
       // Each `Player` is created, told to play, and dropped on the same
       // tick. `Player.deinit` dispatches `libvlc_media_player_stop_async`
       // + `libvlc_media_player_release` to the utility queue; those
@@ -49,6 +49,10 @@ extension Integration {
         let player = Player(instance: instance)
         try player.play(Media(url: TestMedia.twosecURL))
       }
+      // Player release is intentionally offloaded. Give those stops a
+      // moment to drain so the next serialized real-audio test starts
+      // from a clean libVLC aout state.
+      try? await Task.sleep(for: .seconds(1))
     }
 
     // MARK: - b) play → reach .playing → rapid pause/resume

@@ -86,6 +86,10 @@ public final class VLCInstance: Sendable {
     #endif
   }
 
+  var disablesNativeAudioOutput: Bool {
+    Self.containsOption(named: "no-audio", in: arguments)
+  }
+
   private static func containsOption(named name: String, in arguments: [String]) -> Bool {
     let longName = "--\(name)"
     let assignmentPrefix = "\(longName)="
