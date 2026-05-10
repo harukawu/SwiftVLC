@@ -202,11 +202,25 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
       `harukawu/SwiftVLC`, with `SWIFTVLC_GITHUB_REPO=owner/repo` available as
       an override.
 
-- `[ ]` T09 - Final GPL and packaging scan
+- `[x]` T09 - Final GPL and packaging scan
   - Scan scripts and patched VLC source configuration for GPL-enabling options.
   - Scan final artifact metadata and filenames for GPL-only components where
     practical.
   - Record the scan commands and results.
+  - Completed:
+    - Added packaging exclusions and verifier checks so
+      `Resources/share/doc`, `Resources/share/man`, static archives, libtool
+      archives, and obvious GPL-sensitive component filenames fail validation.
+    - Rebuilt the ignored local `Vendor/libvlc.xcframework`; the stricter
+      verifier passed for both iOS slices and deployment target minos remained
+      18.0.
+    - Final scan found no prohibited GPL/GNUv3 or GPL-sensitive `--enable-*`
+      options, confirmed required disable options, and found no suspicious
+      packaged filenames.
+    - `./scripts/release.sh 0.0.0 --dry-run` passed; stripped release zip was
+      115 MB with checksum
+      `2b0d634e2d673053a5eb86f9b0a98ba07a545f68ed9d5881a861837bd7a89924`.
+    - Detailed commands and results are recorded in `LGPL-AUDIT.md`.
 
 - `[ ]` T10 - Final verification summary
   - Confirm branch status and commit history are clean and task-sized.

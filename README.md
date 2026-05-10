@@ -238,7 +238,7 @@ The package must not contain static archives or libtool metadata:
 
 ```bash
 ./scripts/verify-libvlc-xcframework.sh Vendor/libvlc.xcframework
-find Vendor/libvlc.xcframework -name '*.a' -o -name '*.la'
+find Vendor/libvlc.xcframework \( -name '*.a' -o -name '*.la' \) -print
 ```
 
 ### Platform selection
@@ -333,8 +333,8 @@ notices and license files. This fork builds the embeddable libVLC pieces as
 dynamic frameworks and keeps GPL/GNUv3 contrib options disabled so downstream
 apps can evaluate use under libVLC's LGPL terms. See the
 [VLC licensing FAQ](https://www.videolan.org/legal.html), the pinned VLC source
-checked out under `scripts/.build-libvlc/`, and the final GPL scan notes in
-this repository before publishing an app. This README is engineering
+checked out under `scripts/.build-libvlc/`, and [LGPL-AUDIT.md](LGPL-AUDIT.md)
+before publishing an app. This README is engineering
 documentation, not legal advice.
 
 ## Acknowledgments

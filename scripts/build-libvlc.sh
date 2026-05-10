@@ -1783,6 +1783,8 @@ stage_dynamic_framework() {
     if [ -d "${INSTALL_DIR}/share" ]; then
         mkdir -p "${FRAMEWORK_DIR}/Resources"
         cp -R "${INSTALL_DIR}/share" "${FRAMEWORK_DIR}/Resources/"
+        rm -rf "${FRAMEWORK_DIR}/Resources/share/doc" \
+               "${FRAMEWORK_DIR}/Resources/share/man"
     fi
 
     copy_vlc_headers "$FRAMEWORK_DIR"

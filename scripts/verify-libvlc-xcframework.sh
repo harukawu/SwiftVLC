@@ -28,6 +28,7 @@ require_tool find
 require_tool grep
 require_tool lipo
 require_tool otool
+require_tool tr
 
 [[ -d "$XCFW_PATH" ]] || fail "$XCFW_PATH does not exist"
 
@@ -40,6 +41,20 @@ module_hit=$(find "$XCFW_PATH" \( -name 'module.modulemap' -o -name 'CLibVLC.h' 
 if [[ -n "$module_hit" ]]; then
   fail "binary framework headers contain CLibVLC module metadata: $module_hit"
 fi
+
+non_runtime_hit=$(find "$XCFW_PATH" \( -path '*/Resources/share/doc' -o -path '*/Resources/share/man' \) -print -quit)
+if [[ -n "$non_runtime_hit" ]]; then
+  fail "non-runtime VLC documentation/manpage resources found in xcframework: $non_runtime_hit"
+fi
+
+while IFS= read -r artifact_path; do
+  lower_path=$(printf '%s' "$artifact_path" | tr '[:upper:]' '[:lower:]')
+  case "$lower_path" in
+    *dvdcss*|*dvdread*|*dvdnav*|*x264*|*x265*|*faad*|*libdca*|*dca_plugin*|*mpeg2*|*postproc*|*gnuv3*|*gpl*)
+      fail "GPL-sensitive component filename found in xcframework: $artifact_path"
+      ;;
+  esac
+done < <(find "$XCFW_PATH" -print)
 
 EXPECTED_SLICES=(
   "ios-arm64:arm64"
