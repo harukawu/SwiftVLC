@@ -1,6 +1,6 @@
 #!/bin/bash
 # build-libvlc.sh — Compiles libVLC from official VLC source for iOS
-# Produces: Vendor/libvlc.xcframework (static library + C headers)
+# Produces: Vendor/libvlc.xcframework (dynamic iOS frameworks + C headers)
 #
 # Prerequisites:
 #   - Xcode command line tools
@@ -843,7 +843,9 @@ PYEOF
     info "VLC build.sh visionOS deployment target patched"
 }
 
-patch_vlc_xros_deployment_target
+if [ "$BUILD_VISIONOS" = "yes" ]; then
+    patch_vlc_xros_deployment_target
+fi
 
 patch_vlc_deployment_targets() {
     local BUILD_CONF="${VLC_SRC}/extras/package/apple/build.conf"
@@ -1172,6 +1174,7 @@ compile_libvlc() {
     "${VLC_SRC}/extras/package/apple/build.sh" \
         --arch="${ARCH}" \
         --sdk="${PLATFORM}${SDK_VERSION}" \
+        --enable-shared \
         ${MAKEFLAGS}
 
     cd "${BUILD_DIR}"
@@ -1214,164 +1217,234 @@ compile_libvlc_catalyst() {
     info "Finished ${ACTUAL_ARCH} (Mac Catalyst) in ${platform_mins}m$((platform_secs % 60))s"
 }
 
-XCFRAMEWORK_ARGS=()
+vlc_install_dir() {
+    local ARCH="$1"
+    local PLATFORM="$2"
+    local ACTUAL_ARCH
+    ACTUAL_ARCH=$(get_actual_arch "$ARCH")
 
-if [ "$BUILD_IOS" = "yes" ]; then
-    # iOS device (arm64)
-    compile_libvlc aarch64 iphoneos
+    local SDK_VERSION
+    SDK_VERSION=$(xcrun --sdk "${PLATFORM}" --show-sdk-version)
 
-    # iOS simulator (arm64 + x86_64)
-    compile_libvlc aarch64 iphonesimulator
-    compile_libvlc x86_64 iphonesimulator
+    echo "${VLC_SRC}/build-${PLATFORM}-${ACTUAL_ARCH}/vlc-${PLATFORM}${SDK_VERSION}-${ACTUAL_ARCH}"
+}
 
-    # Create fat library for simulator
-    info "Creating fat library for iOS simulator..."
-    mkdir -p "${BUILD_DIR}/libs/ios-simulator"
-    lipo \
-        "${VLC_SRC}/build-iphonesimulator-arm64/static-lib/libvlc-full-static.a" \
-        "${VLC_SRC}/build-iphonesimulator-x86_64/static-lib/libvlc-full-static.a" \
-        -create -output "${BUILD_DIR}/libs/ios-simulator/libvlc.a"
+write_framework_info_plist() {
+    local FRAMEWORK_DIR="$1"
+    local PLATFORM_NAME="$2"
+    local MINIMUM_OS="$3"
 
-    mkdir -p "${BUILD_DIR}/libs/ios-device"
-    cp "${VLC_SRC}/build-iphoneos-arm64/static-lib/libvlc-full-static.a" \
-       "${BUILD_DIR}/libs/ios-device/libvlc.a"
+    cat > "${FRAMEWORK_DIR}/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>libvlc</string>
+  <key>CFBundleIdentifier</key>
+  <string>org.videolan.libvlc</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>libvlc</string>
+  <key>CFBundlePackageType</key>
+  <string>FMWK</string>
+  <key>CFBundleShortVersionString</key>
+  <string>4.0.0</string>
+  <key>CFBundleSupportedPlatforms</key>
+  <array>
+    <string>${PLATFORM_NAME}</string>
+  </array>
+  <key>CFBundleVersion</key>
+  <string>4.0.0</string>
+  <key>MinimumOSVersion</key>
+  <string>${MINIMUM_OS}</string>
+</dict>
+</plist>
+EOF
+}
 
-    XCFRAMEWORK_ARGS+=(-library "${BUILD_DIR}/libs/ios-device/libvlc.a" -headers "${REPO_ROOT}/Sources/CLibVLC/include")
-    XCFRAMEWORK_ARGS+=(-library "${BUILD_DIR}/libs/ios-simulator/libvlc.a" -headers "${REPO_ROOT}/Sources/CLibVLC/include")
-fi
+copy_vlc_headers() {
+    local FRAMEWORK_DIR="$1"
 
-if [ "$BUILD_TVOS" = "yes" ]; then
-    compile_libvlc aarch64 appletvos
-    compile_libvlc aarch64 appletvsimulator
-    compile_libvlc x86_64 appletvsimulator
+    mkdir -p "${FRAMEWORK_DIR}/Headers"
+    cp -R "${REPO_ROOT}/Sources/CLibVLC/include/vlc" "${FRAMEWORK_DIR}/Headers/"
+}
 
-    mkdir -p "${BUILD_DIR}/libs/tvos-simulator"
-    lipo \
-        "${VLC_SRC}/build-appletvsimulator-arm64/static-lib/libvlc-full-static.a" \
-        "${VLC_SRC}/build-appletvsimulator-x86_64/static-lib/libvlc-full-static.a" \
-        -create -output "${BUILD_DIR}/libs/tvos-simulator/libvlc.a"
+stage_dynamic_framework() {
+    local INSTALL_DIR="$1"
+    local FRAMEWORK_DIR="$2"
+    local PLATFORM_NAME="$3"
+    local MINIMUM_OS="$4"
 
-    mkdir -p "${BUILD_DIR}/libs/tvos-device"
-    cp "${VLC_SRC}/build-appletvos-arm64/static-lib/libvlc-full-static.a" \
-       "${BUILD_DIR}/libs/tvos-device/libvlc.a"
+    local LIB_DIR="${INSTALL_DIR}/lib"
+    local MAIN_DYLIB="${LIB_DIR}/libvlc.dylib"
 
-    XCFRAMEWORK_ARGS+=(-library "${BUILD_DIR}/libs/tvos-device/libvlc.a" -headers "${REPO_ROOT}/Sources/CLibVLC/include")
-    XCFRAMEWORK_ARGS+=(-library "${BUILD_DIR}/libs/tvos-simulator/libvlc.a" -headers "${REPO_ROOT}/Sources/CLibVLC/include")
-fi
+    [ -f "$MAIN_DYLIB" ] || error "Missing dynamic libVLC binary: $MAIN_DYLIB"
 
-if [ "$BUILD_VISIONOS" = "yes" ]; then
-    compile_libvlc aarch64 xros
-    compile_libvlc aarch64 xrsimulator
-    compile_libvlc x86_64 xrsimulator
+    rm -rf "$FRAMEWORK_DIR"
+    mkdir -p "$FRAMEWORK_DIR"
 
-    mkdir -p "${BUILD_DIR}/libs/visionos-simulator"
-    lipo \
-        "${VLC_SRC}/build-xrsimulator-arm64/static-lib/libvlc-full-static.a" \
-        "${VLC_SRC}/build-xrsimulator-x86_64/static-lib/libvlc-full-static.a" \
-        -create -output "${BUILD_DIR}/libs/visionos-simulator/libvlc.a"
+    cp -L "$MAIN_DYLIB" "${FRAMEWORK_DIR}/libvlc"
 
-    mkdir -p "${BUILD_DIR}/libs/visionos-device"
-    cp "${VLC_SRC}/build-xros-arm64/static-lib/libvlc-full-static.a" \
-       "${BUILD_DIR}/libs/visionos-device/libvlc.a"
+    while IFS= read -r dylib; do
+        local name
+        name=$(basename "$dylib")
+        case "$name" in
+            libvlc.dylib|libvlc.[0-9]*.dylib) continue ;;
+        esac
+        cp -L "$dylib" "${FRAMEWORK_DIR}/${name}"
+    done < <(find "$LIB_DIR" -maxdepth 1 \( -type f -o -type l \) -name "*.dylib*" -print)
 
-    XCFRAMEWORK_ARGS+=(-library "${BUILD_DIR}/libs/visionos-device/libvlc.a" -headers "${REPO_ROOT}/Sources/CLibVLC/include")
-    XCFRAMEWORK_ARGS+=(-library "${BUILD_DIR}/libs/visionos-simulator/libvlc.a" -headers "${REPO_ROOT}/Sources/CLibVLC/include")
-fi
+    if [ -d "${LIB_DIR}/vlc/plugins" ]; then
+        mkdir -p "${FRAMEWORK_DIR}/plugins"
+        cp -R "${LIB_DIR}/vlc/plugins/." "${FRAMEWORK_DIR}/plugins/"
+        find "${FRAMEWORK_DIR}/plugins" -name "*.la" -delete
+    fi
 
-if [ "$BUILD_MACOS" = "yes" ]; then
-    compile_libvlc aarch64 macosx
-    compile_libvlc x86_64 macosx
+    if [ -d "${INSTALL_DIR}/share" ]; then
+        mkdir -p "${FRAMEWORK_DIR}/Resources"
+        cp -R "${INSTALL_DIR}/share" "${FRAMEWORK_DIR}/Resources/"
+    fi
 
-    mkdir -p "${BUILD_DIR}/libs/macos"
-    lipo \
-        "${VLC_SRC}/build-macosx-arm64/static-lib/libvlc-full-static.a" \
-        "${VLC_SRC}/build-macosx-x86_64/static-lib/libvlc-full-static.a" \
-        -create -output "${BUILD_DIR}/libs/macos/libvlc.a"
+    copy_vlc_headers "$FRAMEWORK_DIR"
+    write_framework_info_plist "$FRAMEWORK_DIR" "$PLATFORM_NAME" "$MINIMUM_OS"
+}
 
-    XCFRAMEWORK_ARGS+=(-library "${BUILD_DIR}/libs/macos/libvlc.a" -headers "${REPO_ROOT}/Sources/CLibVLC/include")
-fi
+merge_dynamic_frameworks() {
+    local PRIMARY_FRAMEWORK="$1"
+    local SECONDARY_FRAMEWORK="$2"
+    local OUTPUT_FRAMEWORK="$3"
 
-if [ "$BUILD_CATALYST" = "yes" ]; then
-    # Mac Catalyst (arm64 + x86_64)
-    compile_libvlc_catalyst aarch64
-    compile_libvlc_catalyst x86_64
+    rm -rf "$OUTPUT_FRAMEWORK"
+    mkdir -p "$(dirname "$OUTPUT_FRAMEWORK")"
+    cp -R "$PRIMARY_FRAMEWORK" "$OUTPUT_FRAMEWORK"
 
-    # Create fat library for Catalyst
-    info "Creating fat library for Mac Catalyst..."
-    mkdir -p "${BUILD_DIR}/libs/maccatalyst"
-    lipo \
-        "${VLC_SRC}/build-maccatalyst-arm64/static-lib/libvlc-full-static.a" \
-        "${VLC_SRC}/build-maccatalyst-x86_64/static-lib/libvlc-full-static.a" \
-        -create -output "${BUILD_DIR}/libs/maccatalyst/libvlc.a"
+    while IFS= read -r primary_file; do
+        local relative_path="${primary_file#${PRIMARY_FRAMEWORK}/}"
+        local secondary_file="${SECONDARY_FRAMEWORK}/${relative_path}"
+        local output_file="${OUTPUT_FRAMEWORK}/${relative_path}"
 
-    XCFRAMEWORK_ARGS+=(-library "${BUILD_DIR}/libs/maccatalyst/libvlc.a" -headers "${REPO_ROOT}/Sources/CLibVLC/include")
-fi
+        if ! lipo -info "$primary_file" >/dev/null 2>&1; then
+            continue
+        fi
 
-# --- Step 4: Create XCFramework ---
-if [ ${#XCFRAMEWORK_ARGS[@]} -eq 0 ]; then
-    error "No platforms were built. This fork only supports the default iOS build or --ios-only."
-fi
+        if [ -f "$secondary_file" ]; then
+            lipo "$primary_file" "$secondary_file" -create -output "$output_file"
+        else
+            info "Keeping arm64-only simulator Mach-O: $relative_path"
+        fi
+    done < <(find "$PRIMARY_FRAMEWORK" -type f -print)
 
-info "Creating libvlc.xcframework..."
-mkdir -p "${OUTPUT_DIR}"
-rm -rf "${OUTPUT_DIR}/libvlc.xcframework"
+    while IFS= read -r secondary_file; do
+        local relative_path="${secondary_file#${SECONDARY_FRAMEWORK}/}"
+        local primary_file="${PRIMARY_FRAMEWORK}/${relative_path}"
+        local output_file="${OUTPUT_FRAMEWORK}/${relative_path}"
 
-xcodebuild -create-xcframework \
-    "${XCFRAMEWORK_ARGS[@]}" \
-    -output "${OUTPUT_DIR}/libvlc.xcframework"
+        if ! lipo -info "$secondary_file" >/dev/null 2>&1; then
+            continue
+        fi
 
-# Fix duplicate symbols (json_parse_error/json_read) in the static library.
-# Two VLC plugins (ytdl, chromecast) each compile their own copy. The Apple
-# linker in Xcode 16+ treats these as errors on some platforms (Mac Catalyst).
-info "Fixing duplicate symbols in static libraries..."
-"${SCRIPT_DIR}/fix-duplicate-symbols.sh" "${OUTPUT_DIR}/libvlc.xcframework"
+        if [ ! -f "$primary_file" ]; then
+            mkdir -p "$(dirname "$output_file")"
+            cp -L "$secondary_file" "$output_file"
+            info "Added x86_64-only simulator Mach-O: $relative_path"
+        fi
+    done < <(find "$SECONDARY_FRAMEWORK" -type f -print)
+}
 
-# Remove the CLibVLC module.modulemap from xcframework headers to avoid
-# "redefinition of module" errors when building with xcodebuild. The CLibVLC
-# SPM target provides its own module map; the xcframework only needs the raw
-# VLC C headers.
-find "${OUTPUT_DIR}/libvlc.xcframework" -name "module.modulemap" -delete
-find "${OUTPUT_DIR}/libvlc.xcframework" -name "CLibVLC.h" -delete
+rewrite_framework_install_names() {
+    local FRAMEWORK_DIR="$1"
 
-info "Created: ${OUTPUT_DIR}/libvlc.xcframework"
+    python3 - "$FRAMEWORK_DIR" << 'PYEOF'
+import os
+import subprocess
+import sys
+from pathlib import Path
 
-# --- Step 5: Verify ---
-#
-# Fail the build if any object file in the xcframework has an LC_BUILD_VERSION
-# with `minos` exceeding the slice's expected deployment target. A contrib
-# that slips the host-SDK default into its objects (see the gsm/CPPFLAGS
-# fix above) would otherwise ship silently and trip the Apple linker with
-# "built for newer 'X' version (Y) than being linked (Z)" warnings in every
-# consumer project. Running this check at build time catches regressions
-# here instead of in user feedback.
+framework = Path(sys.argv[1]).resolve()
+main_binary = framework / "libvlc"
+
+def is_macho(path: Path) -> bool:
+    result = subprocess.run(["lipo", "-info", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return result.returncode == 0
+
+machos = [path for path in framework.rglob("*") if path.is_file() and is_macho(path)]
+local_paths = {path.name: path for path in machos if path.name != "libvlc"}
+
+if main_binary.exists() and is_macho(main_binary):
+    subprocess.run(["install_name_tool", "-id", "@rpath/libvlc.framework/libvlc", str(main_binary)], check=True)
+
+for macho in machos:
+    if macho.name != "libvlc":
+        subprocess.run(["install_name_tool", "-id", f"@loader_path/{macho.name}", str(macho)], check=True)
+
+    otool = subprocess.run(["otool", "-L", str(macho)], check=True, capture_output=True, text=True)
+    for line in otool.stdout.splitlines()[1:]:
+        dependency = line.strip().split(" ", 1)[0]
+        dependency_name = Path(dependency).name
+        if dependency_name == "libvlc.dylib" or (dependency_name.startswith("libvlc.") and dependency_name.endswith(".dylib")):
+            replacement = "@rpath/libvlc.framework/libvlc"
+        elif dependency_name in local_paths:
+            relative_dependency = os.path.relpath(local_paths[dependency_name], macho.parent)
+            replacement = f"@loader_path/{relative_dependency}"
+        else:
+            continue
+        if dependency != replacement:
+            subprocess.run(["install_name_tool", "-change", dependency, replacement, str(macho)], check=True)
+PYEOF
+}
+
+verify_no_static_archives() {
+    if find "${OUTPUT_DIR}/libvlc.xcframework" -name "*.a" -print -quit | grep -q .; then
+        error "Static archives found in libvlc.xcframework; expected dynamic frameworks only."
+    fi
+}
+
+verify_no_libtool_archives() {
+    if find "${OUTPUT_DIR}/libvlc.xcframework" -name "*.la" -print -quit | grep -q .; then
+        error "Libtool archives found in libvlc.xcframework; expected dylibs only."
+    fi
+}
+
+verify_dynamic_frameworks() {
+    local slices=(
+        "ios-arm64"
+        "ios-arm64_x86_64-simulator"
+    )
+    local slice binary
+
+    info "Verifying dynamic framework slices..."
+    for slice in "${slices[@]}"; do
+        binary="${OUTPUT_DIR}/libvlc.xcframework/${slice}/libvlc.framework/libvlc"
+        [ -f "$binary" ] || error "Missing libvlc framework binary for slice: $slice"
+        if ! file "$binary" | grep -q "dynamically linked shared library"; then
+            file "$binary" >&2
+            error "libvlc framework binary is not a dynamic library for slice: $slice"
+        fi
+        info "  ${slice}: $(lipo -info "$binary")"
+    done
+}
+
 verify_deployment_targets() {
     info "Verifying deployment-target minimums in xcframework..."
 
-    # slice_dir:expected_min_version — keep in sync with the SWIFTVLC_MIN_*
-    # values above and the xcframework slice naming xcodebuild emits.
     local slices=(
         "ios-arm64:${SWIFTVLC_MIN_IOS}"
         "ios-arm64_x86_64-simulator:${SWIFTVLC_MIN_IOS}"
-        "tvos-arm64:${SWIFTVLC_MIN_TVOS}"
-        "tvos-arm64_x86_64-simulator:${SWIFTVLC_MIN_TVOS}"
-        "xros-arm64:${SWIFTVLC_MIN_VISIONOS}"
-        "xros-arm64_x86_64-simulator:${SWIFTVLC_MIN_VISIONOS}"
-        "macos-arm64_x86_64:${SWIFTVLC_MIN_MACOS}"
-        "ios-arm64_x86_64-maccatalyst:${SWIFTVLC_MIN_CATALYST}"
     )
 
     local had_failure=0
-    local slice_spec slice expected lib max_minos highest
+    local slice_spec slice expected binary max_minos highest
     for slice_spec in "${slices[@]}"; do
         slice="${slice_spec%%:*}"
         expected="${slice_spec#*:}"
-        lib="${OUTPUT_DIR}/libvlc.xcframework/${slice}/libvlc.a"
-        [ -f "$lib" ] || continue
+        binary="${OUTPUT_DIR}/libvlc.xcframework/${slice}/libvlc.framework/libvlc"
+        [ -f "$binary" ] || continue
 
-        # The highest LC_BUILD_VERSION minos across all objects in the archive.
-        # LC_VERSION_MIN_IPHONEOS (legacy) is not inspected: ld prefers
-        # LC_BUILD_VERSION when present and that's what produces the warning.
-        max_minos=$(otool -l "$lib" 2>/dev/null \
+        max_minos=$(otool -l "$binary" 2>/dev/null \
             | awk '/^[[:space:]]*cmd LC_BUILD_VERSION/{flag=1; next} flag && /^[[:space:]]*minos /{print $2; flag=0}' \
             | sort -V | tail -1)
 
@@ -1380,15 +1453,11 @@ verify_deployment_targets() {
             continue
         fi
 
-        # Pick the higher of (max_minos, expected); if it's max_minos, fail.
         highest=$(printf '%s\n%s\n' "$max_minos" "$expected" | sort -V | tail -1)
         if [ "$highest" = "$expected" ]; then
             info "  ${slice}: minos=${max_minos} <= deployment=${expected}"
         else
             warn "  ${slice}: minos=${max_minos} > deployment=${expected}"
-            warn "    A contrib compiled with the host-SDK default instead of"
-            warn "    SWIFTVLC_MIN_* — consumers will see ld warnings like"
-            warn "    'built for newer X-version than being linked'."
             had_failure=1
         fi
     done
@@ -1398,13 +1467,57 @@ verify_deployment_targets() {
     fi
 }
 
+[ "$BUILD_IOS" = "yes" ] || error "No platforms were built. This fork only supports the default iOS build or --ios-only."
+
+# iOS device (arm64)
+compile_libvlc aarch64 iphoneos
+
+# iOS simulator (arm64 + x86_64)
+compile_libvlc aarch64 iphonesimulator
+compile_libvlc x86_64 iphonesimulator
+
+info "Staging dynamic iOS frameworks..."
+FRAMEWORK_BUILD_DIR="${BUILD_DIR}/frameworks"
+DEVICE_FRAMEWORK="${FRAMEWORK_BUILD_DIR}/ios-device/libvlc.framework"
+SIM_ARM64_FRAMEWORK="${FRAMEWORK_BUILD_DIR}/ios-simulator-arm64/libvlc.framework"
+SIM_X86_64_FRAMEWORK="${FRAMEWORK_BUILD_DIR}/ios-simulator-x86_64/libvlc.framework"
+SIMULATOR_FRAMEWORK="${FRAMEWORK_BUILD_DIR}/ios-simulator/libvlc.framework"
+rm -rf "$FRAMEWORK_BUILD_DIR"
+
+stage_dynamic_framework "$(vlc_install_dir aarch64 iphoneos)" "$DEVICE_FRAMEWORK" "iPhoneOS" "$SWIFTVLC_MIN_IOS"
+stage_dynamic_framework "$(vlc_install_dir aarch64 iphonesimulator)" "$SIM_ARM64_FRAMEWORK" "iPhoneSimulator" "$SWIFTVLC_MIN_IOS"
+stage_dynamic_framework "$(vlc_install_dir x86_64 iphonesimulator)" "$SIM_X86_64_FRAMEWORK" "iPhoneSimulator" "$SWIFTVLC_MIN_IOS"
+merge_dynamic_frameworks "$SIM_ARM64_FRAMEWORK" "$SIM_X86_64_FRAMEWORK" "$SIMULATOR_FRAMEWORK"
+
+rewrite_framework_install_names "$DEVICE_FRAMEWORK"
+rewrite_framework_install_names "$SIMULATOR_FRAMEWORK"
+
+info "Creating libvlc.xcframework..."
+mkdir -p "${OUTPUT_DIR}"
+rm -rf "${OUTPUT_DIR}/libvlc.xcframework"
+
+xcodebuild -create-xcframework \
+    -framework "$DEVICE_FRAMEWORK" \
+    -framework "$SIMULATOR_FRAMEWORK" \
+    -output "${OUTPUT_DIR}/libvlc.xcframework"
+
+# The CLibVLC SPM target provides its own module map and umbrella header.
+# Keep the binary framework linkable while avoiding duplicate C module imports.
+find "${OUTPUT_DIR}/libvlc.xcframework" -name "module.modulemap" -delete
+find "${OUTPUT_DIR}/libvlc.xcframework" -name "CLibVLC.h" -delete
+
+info "Created: ${OUTPUT_DIR}/libvlc.xcframework"
+
+verify_no_static_archives
+verify_no_libtool_archives
+verify_dynamic_frameworks
 verify_deployment_targets
 
 echo ""
 info "Build complete!"
 echo "  XCFramework: ${OUTPUT_DIR}/libvlc.xcframework"
 echo "  Architectures:"
-find "${OUTPUT_DIR}/libvlc.xcframework" -name "*.a" -exec lipo -info {} \;
+find "${OUTPUT_DIR}/libvlc.xcframework" -path "*/libvlc.framework/libvlc" -exec lipo -info {} \;
 
 local_end=$(date +%s)
 local_total=$((local_end - BUILD_START_TIME))

@@ -94,11 +94,27 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
     - Verified `scripts/build-libvlc.sh` syntax and help output after adding the
       guardrails.
 
-- `[ ]` T04 - Build iOS dynamic framework slices
+- `[x]` T04 - Build iOS dynamic framework slices
   - Replace static archive collection with dynamic framework assembly for iOS
     device and simulator.
   - Preserve headers/module-map behavior required by the `CLibVLC` target.
   - Produce `Vendor/libvlc.xcframework` from framework slices.
+  - Completed:
+    - `scripts/build-libvlc.sh` now invokes VLC's Apple build with
+      `--enable-shared` for iphoneos arm64 and iphonesimulator arm64/x86_64.
+    - Static `.a` packaging was replaced with staging of
+      `libvlc.framework` slices, simulator lipo merging for matching Mach-O
+      files, and preservation of architecture-specific simulator plugins.
+    - Framework staging copies VLC headers, removes `module.modulemap` and
+      `CLibVLC.h` from the binary framework headers, strips libtool `.la`
+      metadata, and rewrites local install names with `@rpath`/`@loader_path`.
+    - The generated local artifact is
+      `Vendor/libvlc.xcframework` with `ios-arm64` and
+      `ios-arm64_x86_64-simulator` dynamic framework slices.
+    - Verified `bash -n scripts/build-libvlc.sh`,
+      `./scripts/build-libvlc.sh --ios-only`, no packaged `.a` or `.la`
+      files, dynamic Mach-O file types, corrected plugin/core install names,
+      and iOS deployment target `minos=18.0`.
 
 - `[ ]` T05 - Update Swift package integration
   - Point the local binary target at the rebuilt framework xcframework.
