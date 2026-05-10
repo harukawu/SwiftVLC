@@ -222,10 +222,35 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
       `2b0d634e2d673053a5eb86f9b0a98ba07a545f68ed9d5881a861837bd7a89924`.
     - Detailed commands and results are recorded in `LGPL-AUDIT.md`.
 
-- `[ ]` T10 - Final verification summary
+- `[x]` T10 - Final verification summary
   - Confirm branch status and commit history are clean and task-sized.
   - Summarize artifact shape, test results, GPL scan result, and known residual
     risks.
+  - Completed:
+    - Branch: `codex-ios-dynamic-lgpl-rebuild`.
+    - Commit stack is task-sized from T00 through T09, with the latest completed
+      commit `3931f31 Record LGPL rebuild audit`; tracked worktree was clean
+      before this final TODO update.
+    - Local rebuilt artifact remains ignored at `Vendor/libvlc.xcframework`
+      and is 336 MB with two slices:
+      `ios-arm64` and `ios-arm64_x86_64-simulator`.
+    - Latest rebuild completed in 4m22s, the stricter dynamic framework
+      verifier passed, and both iOS slices reported deployment target
+      `minos=18.0`.
+    - Swift Testing coverage against the rebuilt dynamic framework passed:
+      1,362 tests in 109 suites after 176.049 seconds via iOS simulator
+      `xcodebuild`.
+    - GPL/package scan is recorded in `LGPL-AUDIT.md`; no prohibited enable
+      options, static/libtool archives, doc/man resources, or obvious
+      GPL-sensitive component filenames were found in the final local artifact.
+    - Residual risks:
+      - This is an engineering scan, not legal advice; app publication should
+        still review VideoLAN/libVLC notices and obligations.
+      - `Package.swift` intentionally remains in release URL/checksum form; it
+        will point at this fork's rebuilt binary only after running
+        `release.sh` for a real fork release.
+      - Non-iOS platform declarations remain in `Package.swift` per owner
+        decision, but this fork's rebuilt/release artifact is iOS-only.
 
 ## Owner Decisions
 
