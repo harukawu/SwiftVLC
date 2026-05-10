@@ -263,6 +263,26 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
     - Verification: reviewed README rendering context and confirmed the tracked
       worktree was clean before this TODO update.
 
+- `[x]` T12 - Publish v0.9.0 binary release
+  - Package the rebuilt dynamic iOS `libvlc.xcframework` into a stripped release
+    zip and compute the SwiftPM checksum.
+  - Point `Package.swift` at the fork release asset and update user-facing
+    package instructions to the published fork URL/version.
+  - Tag `v0.9.0`, push the rebuild branch and tag, and upload the zip as a
+    GitHub Release asset.
+  - Completed:
+    - Packaged a stripped release zip at
+      `/private/tmp/SwiftVLC-release-v0.9.0.lVuQTK/libvlc.xcframework.zip`.
+    - `./scripts/verify-libvlc-xcframework.sh` passed for both the source
+      `Vendor/libvlc.xcframework` and the stripped release copy.
+    - Zip size is 115 MB; SwiftPM checksum is
+      `36aa38af07a9576fb2890a5fe50a417dac9e13ff5a3f97f85cd2973cc38c528a`.
+    - `Package.swift` now points at the fork's `v0.9.0` GitHub Release asset,
+      and package instructions now use `https://github.com/harukawu/SwiftVLC.git`
+      with version `0.9.0`.
+    - `swift package dump-package` passed and reported the updated binary
+      target URL and checksum.
+
 ## Owner Decisions
 
 - Keep existing non-iOS platform declarations in `Package.swift`; this fork's

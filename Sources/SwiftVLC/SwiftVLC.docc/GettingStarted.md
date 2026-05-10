@@ -10,16 +10,16 @@ Dependencies** and paste the repository URL; Xcode resolves the latest
 release automatically.
 
 ```
-https://github.com/harflabs/SwiftVLC.git
+https://github.com/harukawu/SwiftVLC.git
 ```
 
 To add it from a `Package.swift` manifest, pin to the current release.
 The version string lives on the
-[releases page](https://github.com/harflabs/SwiftVLC/releases).
+[releases page](https://github.com/harukawu/SwiftVLC/releases).
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/harflabs/SwiftVLC.git", from: "x.y.z")
+    .package(url: "https://github.com/harukawu/SwiftVLC.git", from: "0.9.0")
 ],
 targets: [
     .target(name: "MyApp", dependencies: ["SwiftVLC"])
