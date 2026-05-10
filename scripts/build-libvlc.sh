@@ -1508,9 +1508,7 @@ find "${OUTPUT_DIR}/libvlc.xcframework" -name "CLibVLC.h" -delete
 
 info "Created: ${OUTPUT_DIR}/libvlc.xcframework"
 
-verify_no_static_archives
-verify_no_libtool_archives
-verify_dynamic_frameworks
+"${SCRIPT_DIR}/verify-libvlc-xcframework.sh" "${OUTPUT_DIR}/libvlc.xcframework"
 verify_deployment_targets
 
 echo ""

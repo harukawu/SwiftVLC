@@ -138,10 +138,25 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
       iphoneos and iphonesimulator SDKs. Full simulator build/test coverage is
       tracked in T07.
 
-- `[ ]` T06 - Add dynamic-linkage validation
+- `[x]` T06 - Add dynamic-linkage validation
   - Add script-level checks that fail if `.a` files are produced or packaged.
   - Verify Mach-O load commands or file types show dynamic framework binaries.
   - Add a focused test if Swift-side runtime behavior needs coverage.
+  - Completed:
+    - Added `scripts/verify-libvlc-xcframework.sh` for reusable validation of
+      iOS dynamic framework slices, required architectures, install names,
+      bundled plugin directories, header shape, absence of `.a`/`.la` files,
+      and absence of build-directory Mach-O load paths.
+    - Wired the verifier into `scripts/build-libvlc.sh`,
+      `scripts/setup-dev.sh`, and `scripts/release.sh`.
+    - Updated release stripping to operate on Mach-O files in the dynamic
+      framework copy instead of static `.a` archives, then re-run validation.
+    - Added an iOS-only Swift Testing check that the bundled dynamic plugin
+      path is discoverable from the loaded `libvlc.framework`.
+    - Verified `./scripts/verify-libvlc-xcframework.sh
+      Vendor/libvlc.xcframework`, script syntax, and
+      `./scripts/release.sh 0.0.0 --dry-run` (zip size 115 MB, checksum
+      `82185963ed07dfb1261b04949d501282e0b60f13976a134d4743f7ddf20a130e`).
 
 - `[ ]` T07 - Run and adapt the Swift Testing suite
   - Run the existing SwiftVLC tests against the rebuilt artifact.

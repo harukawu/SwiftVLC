@@ -1,4 +1,6 @@
+@testable import CLibVLC
 @testable import SwiftVLC
+import Darwin
 import Foundation
 import Testing
 
@@ -130,6 +132,20 @@ extension Integration {
       // counter every app ever reads. Opt in by passing it explicitly.
       #expect(!args.contains("--no-stats"))
     }
+
+    #if os(iOS)
+    @Test
+    func `Bundled dynamic plugins path is discoverable on iOS`() throws {
+      let cPath = try #require(swiftvlc_copy_bundled_plugins_path())
+      defer { Darwin.free(cPath) }
+
+      let path = String(cString: cPath)
+      var isDirectory = ObjCBool(false)
+      #expect(FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory))
+      #expect(isDirectory.boolValue)
+      #expect(path.hasSuffix("/libvlc.framework/plugins"))
+    }
+    #endif
 
     #if os(macOS)
     @Test

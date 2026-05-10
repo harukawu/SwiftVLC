@@ -231,6 +231,9 @@ if [[ ${#missing_slices[@]} -gt 0 ]]; then
   exit 1
 fi
 
+echo "Verifying dynamic iOS xcframework..."
+"$SCRIPT_DIR/verify-libvlc-xcframework.sh" "$XCFW_PATH"
+
 if ! command -v gh &>/dev/null; then
   echo "Error: GitHub CLI (gh) is required. Install with: brew install gh" >&2
   exit 1
@@ -283,11 +286,17 @@ WORK_DIR=$(mktemp -d)
 echo "Copying xcframework to temp dir..."
 cp -R "$XCFW_PATH" "$WORK_DIR/libvlc.xcframework"
 
-echo "Stripping debug symbols from .a files..."
+echo "Stripping debug symbols from Mach-O files..."
 BEFORE_SIZE=$(du -sh "$WORK_DIR/libvlc.xcframework" | cut -f1)
-find "$WORK_DIR/libvlc.xcframework" -name '*.a' -exec strip -S {} \;
+while IFS= read -r candidate; do
+  if lipo -info "$candidate" >/dev/null 2>&1; then
+    strip -S "$candidate"
+  fi
+done < <(find "$WORK_DIR/libvlc.xcframework" -type f -print)
 AFTER_SIZE=$(du -sh "$WORK_DIR/libvlc.xcframework" | cut -f1)
 echo "  Before: $BEFORE_SIZE → After: $AFTER_SIZE"
+
+"$SCRIPT_DIR/verify-libvlc-xcframework.sh" "$WORK_DIR/libvlc.xcframework"
 
 # ── Zip ───────────────────────────────────────────────────────────────────────
 
