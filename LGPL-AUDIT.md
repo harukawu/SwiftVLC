@@ -181,6 +181,77 @@ Release URL:
 https://github.com/harukawu/SwiftVLC/releases/download/v0.10.1/libvlc.xcframework.zip
 ```
 
+## Patch Release v0.10.2
+
+A consumer iOS device build reported:
+
+```text
+libvlc.framework: code object is not signed at all
+In subcomponent: libvlc.framework/libvlccore.dylib
+```
+
+Root cause: Xcode re-signs `libvlc.framework` when embedding it into an app, but
+it does not sign loose nested dylibs/plugins first. The `v0.10.1` artifact
+contained valid dynamic frameworks, but the embedded libVLC Mach-O files were
+unsigned. `codesign` therefore rejected the framework bundle during the app's
+device `CodeSign` phase.
+
+Release guardrails added for `v0.10.2`:
+
+- `./scripts/sign-libvlc-xcframework.sh` ad-hoc signs nested Mach-O files first,
+  then signs each containing `libvlc.framework` slice.
+- `./scripts/build-libvlc.sh` signs future local `Vendor/libvlc.xcframework`
+  outputs before verification.
+- `./scripts/release.sh` re-signs stripped release copies before verification
+  and zipping.
+- `./scripts/verify-libvlc-xcframework.sh` now runs
+  `codesign --verify --deep --strict` on each framework slice.
+
+Commands:
+
+```bash
+codesign -dv --verbose=4 Vendor/libvlc.xcframework/ios-arm64/libvlc.framework/libvlccore.dylib
+./scripts/sign-libvlc-xcframework.sh Vendor/libvlc.xcframework
+./scripts/verify-libvlc-xcframework.sh Vendor/libvlc.xcframework
+./scripts/release.sh 0.10.2 --dry-run
+zipinfo -1 /private/tmp/SwiftVLC-release-v0.10.2.U3PkRu/libvlc.xcframework.zip | grep -E '(^|/)\._' || true
+zipinfo -1 /private/tmp/SwiftVLC-release-v0.10.2.U3PkRu/libvlc.xcframework.zip | grep -E '(^|/)[^/]+\.(a|la)$' || true
+swift package compute-checksum /private/tmp/SwiftVLC-release-v0.10.2.U3PkRu/libvlc.xcframework.zip
+ditto -x -k /private/tmp/SwiftVLC-release-v0.10.2.U3PkRu/libvlc.xcframework.zip /private/tmp/SwiftVLC-v0102-sign-verify.wv7oVV
+codesign --force --sign - --timestamp=none --preserve-metadata=identifier,entitlements,flags --generate-entitlement-der /private/tmp/SwiftVLC-v0102-sign-verify.wv7oVV/libvlc.xcframework/ios-arm64/libvlc.framework
+codesign --verify --deep --strict --verbose=2 /private/tmp/SwiftVLC-v0102-sign-verify.wv7oVV/libvlc.xcframework/ios-arm64/libvlc.framework
+```
+
+Results: the local artifact and stripped release copy pass deep strict code
+signature verification for both iOS framework slices. An extracted copy of the
+final upload zip also accepts the same Xcode-style framework signing command that
+consumer app builds use. The release zip still has no AppleDouble, `.a`, or
+`.la` entries.
+
+Final release asset:
+
+```text
+/private/tmp/SwiftVLC-release-v0.10.2.U3PkRu/libvlc.xcframework.zip
+```
+
+Size:
+
+```text
+119,232,982 bytes
+```
+
+SwiftPM checksum:
+
+```text
+0e97d0699b56566ea7ace44cc303e5c10da4eb84c1684181fd113e9bb8588719
+```
+
+Release URL:
+
+```text
+https://github.com/harukawu/SwiftVLC/releases/download/v0.10.2/libvlc.xcframework.zip
+```
+
 ## Notes
 
 - `Vendor/libvlc.xcframework` remains a local/release artifact and is not
@@ -188,6 +259,6 @@ https://github.com/harukawu/SwiftVLC/releases/download/v0.10.1/libvlc.xcframewor
 - The verifier now fails if future packaging reintroduces AppleDouble sidecars,
   `.a`, `.la`, `Resources/share/doc`, `Resources/share/man`, or obvious
   GPL-sensitive component filenames.
-- `Package.swift` is pinned to the fork `v0.10.1` release asset and checksum
+- `Package.swift` is pinned to the fork `v0.10.2` release asset and checksum
   above; the binary artifact remains ignored locally and is shipped only as a
   GitHub Release asset.

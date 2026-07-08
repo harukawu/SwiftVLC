@@ -312,11 +312,21 @@ echo "Stripping debug symbols from Mach-O files..."
 BEFORE_SIZE=$(du -sh "$WORK_DIR/libvlc.xcframework" | cut -f1)
 while IFS= read -r candidate; do
   if lipo -info "$candidate" >/dev/null 2>&1; then
-    strip -S "$candidate"
+    strip_log=$(mktemp)
+    if ! strip -S "$candidate" 2>"$strip_log"; then
+      cat "$strip_log" >&2
+      rm -f "$strip_log"
+      exit 1
+    fi
+    grep -v 'will invalidate the code signature' "$strip_log" >&2 || true
+    rm -f "$strip_log"
   fi
 done < <(find "$WORK_DIR/libvlc.xcframework" -type f -print)
 AFTER_SIZE=$(du -sh "$WORK_DIR/libvlc.xcframework" | cut -f1)
 echo "  Before: $BEFORE_SIZE → After: $AFTER_SIZE"
+
+echo "Ad-hoc signing stripped Mach-O files..."
+"$SCRIPT_DIR/sign-libvlc-xcframework.sh" "$WORK_DIR/libvlc.xcframework"
 
 "$SCRIPT_DIR/verify-libvlc-xcframework.sh" "$WORK_DIR/libvlc.xcframework"
 

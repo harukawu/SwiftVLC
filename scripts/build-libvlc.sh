@@ -2018,6 +2018,9 @@ xcodebuild -create-xcframework \
 find "${OUTPUT_DIR}/libvlc.xcframework" -name "module.modulemap" -delete
 find "${OUTPUT_DIR}/libvlc.xcframework" -name "CLibVLC.h" -delete
 
+info "Ad-hoc signing embedded libVLC code..."
+"${SCRIPT_DIR}/sign-libvlc-xcframework.sh" "${OUTPUT_DIR}/libvlc.xcframework"
+
 info "Created: ${OUTPUT_DIR}/libvlc.xcframework"
 
 "${SCRIPT_DIR}/verify-libvlc-xcframework.sh" "${OUTPUT_DIR}/libvlc.xcframework"

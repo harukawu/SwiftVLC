@@ -24,6 +24,7 @@ require_tool() {
 }
 
 require_tool file
+require_tool codesign
 require_tool find
 require_tool grep
 require_tool lipo
@@ -103,6 +104,11 @@ for spec in "${EXPECTED_SLICES[@]}"; do
 
   [[ -d "$framework/Headers/vlc" ]] || fail "missing VLC headers in slice: $slice"
   [[ -d "$framework/plugins" ]] || fail "missing dynamic VLC plugins in slice: $slice"
+
+  if ! codesign --verify --deep --strict "$framework" >/dev/null 2>&1; then
+    codesign --verify --deep --strict --verbose=2 "$framework" >&2 || true
+    fail "$framework has unsigned or invalidly signed nested code"
+  fi
 
   info "$slice: $(lipo -info "$binary")"
 done

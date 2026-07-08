@@ -19,7 +19,7 @@ The version string lives on the
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/harukawu/SwiftVLC.git", from: "0.10.1")
+    .package(url: "https://github.com/harukawu/SwiftVLC.git", from: "0.10.2")
 ],
 targets: [
     .target(name: "MyApp", dependencies: ["SwiftVLC"])

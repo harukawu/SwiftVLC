@@ -389,6 +389,38 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
       README/DocC install snippets use `0.10.1`, and the Showcase project pins
       `https://github.com/harukawu/SwiftVLC` at exact version `0.10.1`.
 
+- `[x]` T16 - Publish v0.10.2 code-signing fix
+  - Fix device-build signing failures in consumer apps caused by unsigned
+    embedded libVLC dylibs/plugins inside `libvlc.framework`.
+  - Keep the fix packaging-only: do not rebuild VLC or change SwiftVLC API
+    behavior.
+  - Completed:
+    - Reproduced the root cause on the local artifact:
+      `codesign -dv Vendor/libvlc.xcframework/ios-arm64/libvlc.framework/libvlccore.dylib`
+      reported `code object is not signed at all`, matching the test app's
+      `CodeSign` failure.
+    - Added `./scripts/sign-libvlc-xcframework.sh` to ad-hoc sign nested
+      Mach-O files first, then the containing `libvlc.framework` slice.
+    - Updated `./scripts/build-libvlc.sh` so future local builds sign
+      `Vendor/libvlc.xcframework` before verification.
+    - Updated `./scripts/release.sh` so stripped release copies are re-signed
+      before verification and zipping.
+    - Updated `./scripts/verify-libvlc-xcframework.sh` to run
+      `codesign --verify --deep --strict` on each framework slice.
+    - Verified Xcode-style signing flags on an extracted copy of the final
+      `v0.10.2` zip after nested dylibs/plugins were signed:
+      `codesign --force --sign - --timestamp=none --preserve-metadata=identifier,entitlements,flags --generate-entitlement-der`.
+    - `./scripts/release.sh 0.10.2 --dry-run` passed through strip, re-sign,
+      verifier, zip-entry scan, and checksum flow.
+    - Built the persistent signed upload zip at
+      `/private/tmp/SwiftVLC-release-v0.10.2.U3PkRu/libvlc.xcframework.zip`;
+      size is 119,232,982 bytes and SwiftPM checksum is
+      `0e97d0699b56566ea7ace44cc303e5c10da4eb84c1684181fd113e9bb8588719`.
+    - `Package.swift` points at
+      `https://github.com/harukawu/SwiftVLC/releases/download/v0.10.2/libvlc.xcframework.zip`,
+      README/DocC install snippets use `0.10.2`, and the Showcase project pins
+      `https://github.com/harukawu/SwiftVLC` at exact version `0.10.2`.
+
 ## Owner Decisions
 
 - Keep existing non-iOS platform declarations in `Package.swift`; this fork's
