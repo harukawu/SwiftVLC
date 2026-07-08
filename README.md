@@ -84,12 +84,38 @@ current release. The version string lives on the
 [releases page](https://github.com/harukawu/SwiftVLC/releases).
 
 ```swift
-.package(url: "https://github.com/harukawu/SwiftVLC.git", from: "0.10.3")
+.package(url: "https://github.com/harukawu/SwiftVLC.git", from: "0.10.4")
 ```
 
 The pre-built libVLC xcframework downloads automatically via SPM once a fork
 release has been published. It is intentionally kept out of Git and shipped as
 a release asset, matching the upstream workflow.
+
+### Required iOS Signing Phase
+
+Physical iOS devices require every loadable dylib inside the app bundle to be
+signed by the consuming app's signing identity. Xcode re-signs
+`libvlc.framework` when embedding the SwiftPM binary target, but it does not
+re-sign loose nested dylibs such as `libvlccore.dylib` and VLC plugins.
+
+In your iOS app target, add a **Run Script** build phase after SwiftPM embeds
+package frameworks, and before the app is code-signed:
+
+```bash
+set -euo pipefail
+
+SWIFTVLC_SCRIPT="${BUILD_DIR}/../../SourcePackages/checkouts/SwiftVLC/scripts/sign-libvlc-embedded-framework.sh"
+if [ ! -x "$SWIFTVLC_SCRIPT" ]; then
+  SWIFTVLC_SCRIPT=$(find "${BUILD_DIR}/../../SourcePackages/checkouts" -path "*/scripts/sign-libvlc-embedded-framework.sh" -print -quit)
+fi
+
+"$SWIFTVLC_SCRIPT"
+```
+
+The script signs `libvlccore.dylib` and VLC plugin dylibs with
+`EXPANDED_CODE_SIGN_IDENTITY`, then re-signs `libvlc.framework` with
+`org.videolan.libvlc`. Without this phase, device launches can fail with
+`Library not loaded: @loader_path/libvlccore.dylib` and `code signature invalid`.
 
 ## Quick Start
 

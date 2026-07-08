@@ -19,7 +19,7 @@ The version string lives on the
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/harukawu/SwiftVLC.git", from: "0.10.3")
+    .package(url: "https://github.com/harukawu/SwiftVLC.git", from: "0.10.4")
 ],
 targets: [
     .target(name: "MyApp", dependencies: ["SwiftVLC"])
@@ -28,6 +28,28 @@ targets: [
 
 SwiftVLC requires Swift 6.3 and supports iOS 18, macOS 15, tvOS 18,
 visionOS 2, and macCatalyst 18.
+
+## Add the iOS signing build phase
+
+Physical iOS devices require the nested libVLC dylibs and plugins to be signed
+with your app's signing identity. Add a Run Script phase to your iOS app target
+after SwiftPM embeds package frameworks:
+
+```bash
+set -euo pipefail
+
+SWIFTVLC_SCRIPT="${BUILD_DIR}/../../SourcePackages/checkouts/SwiftVLC/scripts/sign-libvlc-embedded-framework.sh"
+if [ ! -x "$SWIFTVLC_SCRIPT" ]; then
+  SWIFTVLC_SCRIPT=$(find "${BUILD_DIR}/../../SourcePackages/checkouts" -path "*/scripts/sign-libvlc-embedded-framework.sh" -print -quit)
+fi
+
+"$SWIFTVLC_SCRIPT"
+```
+
+The script signs `libvlccore.dylib` and VLC plugin dylibs with
+`EXPANDED_CODE_SIGN_IDENTITY`, then re-signs `libvlc.framework` with
+`org.videolan.libvlc`. Without this phase, physical device launches can fail
+with a dyld `code signature invalid` error for `libvlccore.dylib`.
 
 ## Prepare libVLC at launch
 

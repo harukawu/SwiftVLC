@@ -326,6 +326,81 @@ Release URL:
 https://github.com/harukawu/SwiftVLC/releases/download/v0.10.3/libvlc.xcframework.zip
 ```
 
+## Patch Release v0.10.4
+
+After `v0.10.3`, the consumer test app compiled and installed on a physical
+iPhone but crashed at launch:
+
+```text
+Library not loaded: @loader_path/libvlccore.dylib
+Reason: ... libvlc.framework/libvlccore.dylib (code signature invalid)
+```
+
+Root cause: the release artifact can carry ad-hoc signatures for nested VLC
+dylibs, which is enough for Xcode's framework signing and iOS package
+inspection. At runtime on a physical device, dyld requires loadable nested code
+inside the app bundle to be signed by the consuming app's signing identity.
+Xcode re-signs `libvlc.framework` itself but does not re-sign loose nested
+dylibs/plugins inside that framework.
+
+Release guardrails and integration added for `v0.10.4`:
+
+- `./scripts/sign-libvlc-embedded-framework.sh` is intended for consuming iOS
+  app targets as a Run Script build phase after SwiftPM embeds package
+  frameworks.
+- The script signs `libvlccore.dylib` and VLC plugin dylibs with
+  `EXPANDED_CODE_SIGN_IDENTITY`, mirrors `Resources/Info.plist`, re-signs
+  `libvlc.framework` with `org.videolan.libvlc`, and verifies the result.
+- README and DocC now document the required Run Script phase. The binary
+  artifact remains LGPL-oriented, iOS-only, dynamic, and generated outside Git.
+
+Commands:
+
+```bash
+TARGET_BUILD_DIR=/private/tmp \
+FRAMEWORKS_FOLDER_PATH=testVLC-v0104-script.app/Frameworks \
+EXPANDED_CODE_SIGN_IDENTITY=D8CB58D8A6C0B3D33C6C8785F1901CCA09B479FA \
+CODE_SIGNING_ALLOWED=YES \
+PLATFORM_NAME=iphoneos \
+scripts/sign-libvlc-embedded-framework.sh
+
+xcrun devicectl device install app --device 00008150-0016659C0C2B401C /private/tmp/testVLC-v0104-script.app
+xcrun devicectl device process launch --device 00008150-0016659C0C2B401C --terminate-existing --console --timeout 8 com.haruka.testVLC
+./scripts/release.sh 0.10.4 --dry-run
+swift package compute-checksum /private/tmp/SwiftVLC-release-v0.10.4.AGj70d/libvlc.xcframework.zip
+```
+
+Results: the script signed 344 nested Mach-O files in `libvlc.framework` with
+the app's Apple Development identity. The script-signed app installed on the
+connected iPhone and launched without the immediate dyld
+`libvlccore.dylib` signature crash; `devicectl` timed out after 8 seconds
+because the app remained running. The release zip still has no AppleDouble,
+`.a`, or `.la` entries.
+
+Final release asset:
+
+```text
+/private/tmp/SwiftVLC-release-v0.10.4.AGj70d/libvlc.xcframework.zip
+```
+
+Size:
+
+```text
+119,234,380 bytes
+```
+
+SwiftPM checksum:
+
+```text
+8e464b850fcce2c3175e3839985fbfadb24f54ae1ca0ea47bf4376121e175f3c
+```
+
+Release URL:
+
+```text
+https://github.com/harukawu/SwiftVLC/releases/download/v0.10.4/libvlc.xcframework.zip
+```
+
 ## Notes
 
 - `Vendor/libvlc.xcframework` remains a local/release artifact and is not
@@ -334,6 +409,9 @@ https://github.com/harukawu/SwiftVLC/releases/download/v0.10.3/libvlc.xcframewor
   `.a`, `.la`, `Resources/share/doc`, `Resources/share/man`, obvious
   GPL-sensitive component filenames, unsigned nested code, unbound framework
   plist entries, or mismatched framework signing identifiers.
-- `Package.swift` is pinned to the fork `v0.10.3` release asset and checksum
+- Physical iOS app targets must run
+  `./scripts/sign-libvlc-embedded-framework.sh` during their own build so dyld
+  accepts nested libVLC dylibs/plugins at runtime.
+- `Package.swift` is pinned to the fork `v0.10.4` release asset and checksum
   above; the binary artifact remains ignored locally and is shipped only as a
   GitHub Release asset.
