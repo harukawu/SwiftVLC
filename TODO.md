@@ -319,7 +319,7 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
       resolved the package graph and listed `DynamicHost-iOS` as the only host
       target.
 
-- `[ ]` T14 - Publish v0.10.0 binary release
+- `[x]` T14 - Publish v0.10.0 binary release
   - Rebuild the ignored dynamic iOS `Vendor/libvlc.xcframework` from the merged
     scripts with `./scripts/build-libvlc.sh --ios-only`.
   - Verify artifact shape, linkage, install names, deployment targets, absence
@@ -333,6 +333,29 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
     README/DocC release references, and the Showcase package pin with the final
     checksum, then tag `v0.10.0`, push the rebuild branch/tag, and upload the
     release asset.
+  - Completed:
+    - Rebuilt `Vendor/libvlc.xcframework` with
+      `./scripts/build-libvlc.sh --ios-only` from VLC `c833c4be0`.
+    - Verified the final artifact is dynamic and iOS-only with
+      `./scripts/verify-libvlc-xcframework.sh Vendor/libvlc.xcframework`,
+      explicit `.a`/`.la`, doc/man, GPL-sensitive filename, Mach-O type,
+      install-name, dependency, and deployment-target scans.
+    - Ran GPL-focused source/config scans; no GPL/GNUv3 enable flags were found
+      and required disable guardrails remain present.
+    - Ran the iOS simulator suite on iPhone 17 Pro:
+      `1496` Swift Testing tests in `123` suites passed. The upstream native
+      volume-event assertion is skipped on iOS simulator because that backend
+      applies volume changes without emitting `MediaPlayerAudioVolume`; the C
+      event mapper and live volume setter coverage both remain active.
+    - `./scripts/release.sh 0.10.0 --dry-run` passed. The upload zip was rebuilt
+      persistently at
+      `/private/tmp/SwiftVLC-release-v0.10.0.4bAhzz/libvlc.xcframework.zip`;
+      size is 112 MB and SwiftPM checksum is
+      `b95c6c0978334ed0a24e08c4010b139e15f657add6c3e1c0ea72e209d0a708cf`.
+    - `Package.swift` points at
+      `https://github.com/harukawu/SwiftVLC/releases/download/v0.10.0/libvlc.xcframework.zip`,
+      README/DocC install snippets use `0.10.0`, and the Showcase project pins
+      `https://github.com/harukawu/SwiftVLC` at exact version `0.10.0`.
 
 ## Owner Decisions
 

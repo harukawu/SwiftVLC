@@ -57,7 +57,10 @@ if [[ "${assert_hits:-0}" -gt 0 ]]; then
 fi
 
 while IFS= read -r artifact_path; do
-  lower_path=$(printf '%s' "$artifact_path" | tr '[:upper:]' '[:lower:]')
+  relative_path="${artifact_path#"$XCFW_PATH"/}"
+  [[ "$relative_path" == "$artifact_path" ]] && continue
+
+  lower_path=$(printf '%s' "$relative_path" | tr '[:upper:]' '[:lower:]')
   case "$lower_path" in
     *dvdcss*|*dvdread*|*dvdnav*|*x264*|*x265*|*faad*|*libdca*|*dca_plugin*|*mpeg2*|*postproc*|*gnuv3*|*gpl*)
       fail "GPL-sensitive component filename found in xcframework: $artifact_path"

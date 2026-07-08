@@ -996,7 +996,7 @@
 /* Begin XCRemoteSwiftPackageReference section */
 		BA000001 /* XCRemoteSwiftPackageReference "SwiftVLC" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/harflabs/SwiftVLC";
+			repositoryURL = "https://github.com/harukawu/SwiftVLC";
 			requirement = {
 				kind = exactVersion;
 				version = 0.10.0;

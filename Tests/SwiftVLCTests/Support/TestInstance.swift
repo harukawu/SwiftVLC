@@ -80,11 +80,10 @@ enum TestInstance {
 
   /// Creates an independent VLC instance with the dummy video output but
   /// a real audio output. The dummy audio module swallows mute/volume
-  /// reports, so `.muted` / `.unmuted` / `.volumeChanged` never reach the
-  /// player's event manager under ``makePlayback()``; asserting their
-  /// delivery requires the live aout core. Playback through this instance
-  /// emits brief audible output on the host, so keep usage behind
-  /// `TestCondition.canPlayMedia` and mute or stop promptly.
+  /// reports, so audio event assertions require the live aout core. Native
+  /// volume-change event delivery is backend-specific; on the iOS simulator
+  /// the volume value updates, but libVLC does not emit
+  /// `MediaPlayerAudioVolume`.
   static func makeRealAudioPlayback() -> VLCInstance {
     try! VLCInstance(arguments: VLCInstance.defaultArguments + ["--vout=dummy", "--quiet"])
   }

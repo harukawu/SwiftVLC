@@ -84,7 +84,7 @@ current release. The version string lives on the
 [releases page](https://github.com/harukawu/SwiftVLC/releases).
 
 ```swift
-.package(url: "https://github.com/harukawu/SwiftVLC.git", from: "0.9.0")
+.package(url: "https://github.com/harukawu/SwiftVLC.git", from: "0.10.0")
 ```
 
 The pre-built libVLC xcframework downloads automatically via SPM once a fork

@@ -233,7 +233,13 @@ extension Integration {
       task.cancel()
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(
+      .timeLimit(.minutes(1)),
+      .enabled(
+        if: TestCondition.canObserveNativeVolumeEvents,
+        "The iOS simulator audio backend does not emit native volume events"
+      )
+    )
     func `Volume changed event`() async throws {
       let player = Player(instance: TestInstance.makeRealAudioPlayback())
       let stream = player.events
