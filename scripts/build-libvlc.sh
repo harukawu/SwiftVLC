@@ -1783,6 +1783,17 @@ copy_vlc_headers() {
     cp -R "${REPO_ROOT}/Sources/CLibVLC/include/vlc" "${FRAMEWORK_DIR}/Headers/"
 }
 
+mirror_framework_resources_info_plist() {
+    local FRAMEWORK_DIR="$1"
+
+    # A top-level Resources directory makes codesign use the deep-framework
+    # plist location. Keep the iOS root plist and mirror it there so device
+    # installation can validate the framework bundle.
+    if [ -d "${FRAMEWORK_DIR}/Resources" ]; then
+        cp "${FRAMEWORK_DIR}/Info.plist" "${FRAMEWORK_DIR}/Resources/Info.plist"
+    fi
+}
+
 stage_dynamic_framework() {
     local INSTALL_DIR="$1"
     local FRAMEWORK_DIR="$2"
@@ -1823,6 +1834,7 @@ stage_dynamic_framework() {
 
     copy_vlc_headers "$FRAMEWORK_DIR"
     write_framework_info_plist "$FRAMEWORK_DIR" "$PLATFORM_NAME" "$MINIMUM_OS"
+    mirror_framework_resources_info_plist "$FRAMEWORK_DIR"
 }
 
 merge_dynamic_frameworks() {

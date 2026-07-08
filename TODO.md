@@ -421,6 +421,44 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
       README/DocC install snippets use `0.10.2`, and the Showcase project pins
       `https://github.com/harukawu/SwiftVLC` at exact version `0.10.2`.
 
+- `[x]` T17 - Publish v0.10.3 device-install packaging fix
+  - Fix iPhone install failures in consumer apps caused by `libvlc.framework`
+    signatures not binding framework plist entries.
+  - Keep the fix packaging-only: do not rebuild VLC or change SwiftVLC API
+    behavior.
+  - Completed:
+    - Reproduced the install failure with `v0.10.2` on iPhone
+      `00008150-0016659C0C2B401C`: `Info.plist from bundle ... had none of
+      the keys that we expect`.
+    - Proved the root cause: `libvlc.framework` contained a top-level
+      `Resources/` directory, causing codesign to use the deep-framework plist
+      location while no `Resources/Info.plist` existed. The signature therefore
+      reported `Info.plist=not bound`.
+    - Updated `./scripts/build-libvlc.sh` and
+      `./scripts/sign-libvlc-xcframework.sh` to mirror the root framework plist
+      to `Resources/Info.plist` and sign each framework with
+      `CFBundleIdentifier` (`org.videolan.libvlc`).
+    - Updated `./scripts/verify-libvlc-xcframework.sh` to reject artifacts whose
+      framework signing identifier does not match `CFBundleIdentifier`, whose
+      plist entries are not bound, or whose `Resources/Info.plist` does not
+      mirror the root plist.
+    - Verified an Xcode-style re-sign of the fixed framework preserves
+      `Identifier=org.videolan.libvlc` and reports `Info.plist entries=10`.
+    - Verified a realistic Xcode embed/sign simulation with the fixed local
+      artifact installs on the connected iPhone.
+    - `./scripts/release.sh 0.10.3 --dry-run` passed through strip, re-sign,
+      verifier, zip-entry scan, and checksum flow.
+    - Built the persistent signed upload zip at
+      `/private/tmp/SwiftVLC-release-v0.10.3.c7lOIX/libvlc.xcframework.zip`;
+      size is 119,234,380 bytes and SwiftPM checksum is
+      `450f4a8c91a5a8f8530d11ee83365166c68e7d6dcc9cd2c00a42ed19e2ae4ccb`.
+    - Verified an app copy using the extracted final `v0.10.3` zip installs on
+      the connected iPhone.
+    - `Package.swift` points at
+      `https://github.com/harukawu/SwiftVLC/releases/download/v0.10.3/libvlc.xcframework.zip`,
+      README/DocC install snippets use `0.10.3`, and the Showcase project pins
+      `https://github.com/harukawu/SwiftVLC` at exact version `0.10.3`.
+
 ## Owner Decisions
 
 - Keep existing non-iOS platform declarations in `Package.swift`; this fork's

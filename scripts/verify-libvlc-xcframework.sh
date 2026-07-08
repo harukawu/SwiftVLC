@@ -29,6 +29,7 @@ require_tool find
 require_tool grep
 require_tool lipo
 require_tool otool
+require_tool plutil
 require_tool strings
 require_tool tr
 require_tool xargs
@@ -84,9 +85,29 @@ for spec in "${EXPECTED_SLICES[@]}"; do
   archs="${spec#*:}"
   framework="$XCFW_PATH/$slice/libvlc.framework"
   binary="$framework/libvlc"
+  plist="$framework/Info.plist"
 
   [[ -d "$framework" ]] || fail "missing framework slice: $slice"
   [[ -f "$binary" ]] || fail "missing libvlc binary for slice: $slice"
+  [[ -f "$plist" ]] || fail "missing framework Info.plist for slice: $slice"
+
+  bundle_id=$(plutil -extract CFBundleIdentifier raw -o - "$plist" 2>/dev/null) \
+    || fail "cannot read CFBundleIdentifier from $plist"
+  executable=$(plutil -extract CFBundleExecutable raw -o - "$plist" 2>/dev/null) \
+    || fail "cannot read CFBundleExecutable from $plist"
+  package_type=$(plutil -extract CFBundlePackageType raw -o - "$plist" 2>/dev/null) \
+    || fail "cannot read CFBundlePackageType from $plist"
+
+  [[ "$bundle_id" == "org.videolan.libvlc" ]] \
+    || fail "$plist has unexpected CFBundleIdentifier: $bundle_id"
+  [[ "$executable" == "libvlc" ]] \
+    || fail "$plist has unexpected CFBundleExecutable: $executable"
+  [[ "$package_type" == "FMWK" ]] \
+    || fail "$plist has unexpected CFBundlePackageType: $package_type"
+
+  if [[ -d "$framework/Resources" ]] && ! cmp -s "$plist" "$framework/Resources/Info.plist"; then
+    fail "$framework/Resources/Info.plist must mirror the root framework Info.plist"
+  fi
 
   if ! file "$binary" | grep -q "dynamically linked shared library"; then
     file "$binary" >&2
@@ -108,6 +129,16 @@ for spec in "${EXPECTED_SLICES[@]}"; do
   if ! codesign --verify --deep --strict "$framework" >/dev/null 2>&1; then
     codesign --verify --deep --strict --verbose=2 "$framework" >&2 || true
     fail "$framework has unsigned or invalidly signed nested code"
+  fi
+
+  signing_details=$(codesign -dv --verbose=4 "$framework" 2>&1)
+  if ! grep -q "^Identifier=${bundle_id}$" <<<"$signing_details"; then
+    echo "$signing_details" >&2
+    fail "$framework signing identifier does not match CFBundleIdentifier"
+  fi
+  if ! grep -q '^Info.plist entries=' <<<"$signing_details"; then
+    echo "$signing_details" >&2
+    fail "$framework code signature does not bind Info.plist entries"
   fi
 
   info "$slice: $(lipo -info "$binary")"

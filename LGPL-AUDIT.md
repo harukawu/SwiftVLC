@@ -252,13 +252,88 @@ Release URL:
 https://github.com/harukawu/SwiftVLC/releases/download/v0.10.2/libvlc.xcframework.zip
 ```
 
+## Patch Release v0.10.3
+
+After updating a consumer test app to `v0.10.2`, the app compiled and signed but
+failed to install on a physical iPhone:
+
+```text
+Info.plist from bundle at path .../testVLC.app/Frameworks/libvlc.framework had none of the keys that we expect
+```
+
+Root cause: `libvlc.framework` is an iOS-style shallow framework with its
+canonical `Info.plist` at the framework root, but it also carries VLC runtime
+data under a top-level `Resources/` directory. With that directory present,
+`codesign` uses the deep-framework plist location. Because
+`Resources/Info.plist` was missing, the framework signature reported
+`Info.plist=not bound`, and the iOS installer could not validate the framework
+bundle metadata. Once the plist was mirrored into `Resources/Info.plist`, the
+installer moved to the next validation error until the framework signing
+identifier was also made to match `CFBundleIdentifier` (`org.videolan.libvlc`).
+
+Release guardrails added for `v0.10.3`:
+
+- `./scripts/build-libvlc.sh` mirrors the root framework plist to
+  `Resources/Info.plist` whenever VLC runtime resources create that directory.
+- `./scripts/sign-libvlc-xcframework.sh` performs the same mirror repair for
+  existing artifacts, signs nested Mach-O files, then signs `libvlc.framework`
+  with the framework `CFBundleIdentifier`.
+- `./scripts/verify-libvlc-xcframework.sh` now rejects artifacts whose framework
+  signing identifier does not match `CFBundleIdentifier`, whose code signature
+  does not bind plist entries, or whose `Resources/Info.plist` does not mirror
+  the root plist.
+
+Commands:
+
+```bash
+./scripts/sign-libvlc-xcframework.sh Vendor/libvlc.xcframework
+codesign -dv --verbose=4 Vendor/libvlc.xcframework/ios-arm64/libvlc.framework
+./scripts/verify-libvlc-xcframework.sh Vendor/libvlc.xcframework
+./scripts/release.sh 0.10.3 --dry-run
+swift package compute-checksum /private/tmp/SwiftVLC-release-v0.10.3.c7lOIX/libvlc.xcframework.zip
+ditto -x -k /private/tmp/SwiftVLC-release-v0.10.3.c7lOIX/libvlc.xcframework.zip /private/tmp/SwiftVLC-v0103-zip-verify.14r0C9
+./scripts/verify-libvlc-xcframework.sh /private/tmp/SwiftVLC-v0103-zip-verify.14r0C9/libvlc.xcframework
+xcrun devicectl device install app --device 00008150-0016659C0C2B401C /private/tmp/testVLC-v0103-zip-sim.app
+```
+
+Results: both iOS framework slices pass deep strict code-signature verification,
+report `Identifier=org.videolan.libvlc`, and report `Info.plist entries=10`.
+An app copy using the extracted final `v0.10.3` zip installed successfully on
+the connected iPhone. The release zip still has no AppleDouble, `.a`, or `.la`
+entries.
+
+Final release asset:
+
+```text
+/private/tmp/SwiftVLC-release-v0.10.3.c7lOIX/libvlc.xcframework.zip
+```
+
+Size:
+
+```text
+119,234,380 bytes
+```
+
+SwiftPM checksum:
+
+```text
+450f4a8c91a5a8f8530d11ee83365166c68e7d6dcc9cd2c00a42ed19e2ae4ccb
+```
+
+Release URL:
+
+```text
+https://github.com/harukawu/SwiftVLC/releases/download/v0.10.3/libvlc.xcframework.zip
+```
+
 ## Notes
 
 - `Vendor/libvlc.xcframework` remains a local/release artifact and is not
   committed.
 - The verifier now fails if future packaging reintroduces AppleDouble sidecars,
-  `.a`, `.la`, `Resources/share/doc`, `Resources/share/man`, or obvious
-  GPL-sensitive component filenames.
-- `Package.swift` is pinned to the fork `v0.10.2` release asset and checksum
+  `.a`, `.la`, `Resources/share/doc`, `Resources/share/man`, obvious
+  GPL-sensitive component filenames, unsigned nested code, unbound framework
+  plist entries, or mismatched framework signing identifiers.
+- `Package.swift` is pinned to the fork `v0.10.3` release asset and checksum
   above; the binary artifact remains ignored locally and is shipped only as a
   GitHub Release asset.
