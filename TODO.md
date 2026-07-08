@@ -347,6 +347,12 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
       volume-event assertion is skipped on iOS simulator because that backend
       applies volume changes without emitting `MediaPlayerAudioVolume`; the C
       event mapper and live volume setter coverage both remain active.
+    - Verified the volume-event skip against upstream SwiftVLC `9065ad6` using
+      upstream's static `harflabs` v0.10.0 binary target. The focused
+      `SwiftVLCTests/Integration/EventBridgeTests` run failed the same
+      `Volume changed event` assertion on iPhone 17 Pro simulator while the
+      other EventBridge tests passed, confirming this is a simulator/backend
+      event-emission limitation rather than a dynamic LGPL packaging regression.
     - `./scripts/release.sh 0.10.0 --dry-run` passed. The upload zip was rebuilt
       persistently at
       `/private/tmp/SwiftVLC-release-v0.10.0.4bAhzz/libvlc.xcframework.zip`;

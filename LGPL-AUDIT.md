@@ -81,6 +81,22 @@ applies volume changes without emitting `MediaPlayerAudioVolume`; `MapEventTests
 still covers the C event mapping and `PlayerTypedAccessorsTests` verifies the
 live native volume setter reaches libVLC.
 
+Upstream static-artifact comparison:
+
+```bash
+git worktree add --detach /private/tmp/SwiftVLC-upstream-v010 upstream/main
+xcodebuild test -scheme SwiftVLC -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -configuration Debug -derivedDataPath /private/tmp/SwiftVLC-upstream-v010-tests -skipPackagePluginValidation -skipMacroValidation -collect-test-diagnostics never -only-testing:SwiftVLCTests/Integration/EventBridgeTests CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+```
+
+Result: upstream SwiftVLC `9065ad6` with its static `harflabs` v0.10.0
+`libvlc.xcframework` reproduced the same iOS Simulator behavior:
+`EventBridgeTests.Volume changed event` failed while waiting for
+`volume changed event received`. The upstream artifact resolved to static
+`libvlc.a` slices, including
+`SourcePackages/artifacts/swiftvlc-upstream-v010/libvlc/libvlc.xcframework/ios-arm64_x86_64-simulator/libvlc.a`.
+This confirms the fork's conditional skip documents a simulator/backend event
+emission limitation, not a regression introduced by dynamic LGPL packaging.
+
 ## Release Dry Run
 
 Command:
