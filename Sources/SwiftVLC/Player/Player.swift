@@ -50,8 +50,24 @@ public final class Player {
   /// bar; the `state` enum only carries lifecycle information.
   public internal(set) var bufferFill: Float = 0
 
+  /// Number of decoded video outputs; `0` when none.
+  ///
+  /// Mirrors libVLC's video-output count as reported by
+  /// ``PlayerEvent/voutChanged(_:)``. Stays `0` for audio-only media
+  /// and resets when media is loaded or replaced. See also
+  /// ``hasVideoOutput`` for a live probe of whether a video track is
+  /// selected and decoding.
+  public internal(set) var activeVideoOutputs: Int = 0
+
   /// The currently loaded media.
   public internal(set) var currentMedia: Media?
+
+  /// Whether the last `stopped` transition was a natural end of media.
+  ///
+  /// Set when ``PlayerEvent/endReached-enum.case`` is synthesized; reset by the
+  /// next ``load(_:)``, ``play(_:)``, or ``play()``. See
+  /// ``PlayerEvent/endReached-enum.case`` for what counts as a natural end.
+  public internal(set) var didReachEnd: Bool = false
 
   /// Available audio tracks.
   public internal(set) var audioTracks: [Track] = []
@@ -149,9 +165,11 @@ public final class Player {
   ///   starts.
   /// - Format-specific decoder limitations.
   ///
+  /// ``setPlaybackRate(_:)`` is the public mutator.
+  ///
   /// - Parameter newRate: Target rate. `1.0` is normal speed.
   /// - Throws: ``VLCError/operationFailed(_:)`` if libVLC rejects the rate.
-  public func setRate(_ newRate: PlaybackRate) throws(VLCError) {
+  func setRate(_ newRate: PlaybackRate) throws(VLCError) {
     let rc = withMutation(keyPath: \.rate) {
       libvlc_media_player_set_rate(pointer, newRate.rawValue)
     }
@@ -299,10 +317,76 @@ public final class Player {
 
   // MARK: - Event Stream
 
-  /// Raw event stream for custom processing.
+  /// Raw event stream for custom processing, with the default buffering
+  /// policy (`.newest(64)`) and no filter.
   /// Most consumers should use `@Observable` properties instead.
+  /// See ``events(policy:filter:)`` for the delivery guarantees and their
+  /// limits.
   public nonisolated var events: AsyncStream<PlayerEvent> {
-    eventBridge.makeStream()
+    eventBridge.makeStream(policy: .newest(64), filter: nil)
+  }
+
+  /// Raw event stream with an explicit buffering policy and an optional
+  /// per-subscription filter.
+  ///
+  /// The default `.newest(64)` policy bounds memory but is lossy: a
+  /// consumer stalled past 64 undelivered events silently loses the
+  /// oldest ones, which can include one-shot terminal transitions such as
+  /// `.stateChanged(.stopped)` or ``PlayerEvent/endReached-enum.case``. Consumers
+  /// that must not miss those should pass `.unbounded`, ideally with a
+  /// `filter` that keeps the `timeChanged`/`positionChanged` firehose out
+  /// of the buffer.
+  ///
+  /// `filter` runs on libVLC's event thread for every event, outside any
+  /// SwiftVLC lock — keep it fast and never block in it. Don't touch
+  /// main-actor state from it: beyond the usual isolation rules, native
+  /// teardown (handle replacement, player deinit) joins the event thread
+  /// while detaching callbacks, so a filter blocked on the main actor
+  /// can deadlock teardown against the very thread it is stalling.
+  ///
+  /// A delivery limit that no policy removes: when the player replaces
+  /// its native handle (stopping drawable-hosted playback does this
+  /// lazily, and ``recast(to:)``-style renderer changes do it
+  /// mid-session), the bridge reattaches to the replacement handle before
+  /// the old one finishes stopping on a background queue. Terminal events
+  /// of the *swapped-out* handle are never delivered to any stream; state
+  /// derived from them is reset by the swap itself.
+  public nonisolated func events(
+    policy: EventBufferingPolicy = .newest(64),
+    filter: (@Sendable (PlayerEvent) -> Bool)? = nil
+  ) -> AsyncStream<PlayerEvent> {
+    eventBridge.makeStream(policy: policy, filter: filter)
+  }
+
+  /// Lossless stream of lifecycle state transitions — no firehose.
+  ///
+  /// Equivalent to an `.unbounded` ``events(policy:filter:)``
+  /// subscription that keeps only `.stateChanged` payloads, so a lagging
+  /// consumer can never lose a one-shot terminal transition. Memory is
+  /// bounded in practice by the low rate of state changes.
+  public nonisolated var stateTransitions: AsyncStream<PlayerState> {
+    let upstream = eventBridge.makeStream(
+      policy: .unbounded,
+      filter: { event in
+        if case .stateChanged = event { return true }
+        return false
+      }
+    )
+    let (stream, continuation) = AsyncStream<PlayerState>.makeStream(
+      bufferingPolicy: .unbounded
+    )
+    let pump = Task {
+      for await event in upstream {
+        if case .stateChanged(let state) = event {
+          continuation.yield(state)
+        }
+      }
+      continuation.finish()
+    }
+    continuation.onTermination = { _ in
+      pump.cancel()
+    }
+    return stream
   }
 
   nonisolated var playbackIntentEvents: AsyncStream<Bool> {
@@ -314,6 +398,7 @@ public final class Player {
   @ObservationIgnored
   nonisolated(unsafe) var pointer: OpaquePointer // libvlc_media_player_t*
   let eventBridge: EventBridge
+  nonisolated let endCoordinator = PlaybackEndCoordinator()
   nonisolated let playbackIntentBridge: Broadcaster<Bool>
   var eventTask: Task<Void, Never>?
   var _position: Double = 0
@@ -344,6 +429,23 @@ public final class Player {
   /// replaces this task so rapid mutations collapse into a single restore
   /// scheduled from the latest write.
   var _marqueeRestoreTask: Task<Void, Never>?
+  /// Shadows of per-player state that libVLC exposes no getter for (or
+  /// whose live value can't be trusted mid-mutation). The native-handle
+  /// replacement re-applies them to the fresh handle; without a shadow
+  /// each silently reverts to its default on the first stop of
+  /// drawable-hosted playback.
+  var _logoFile: String?
+  var _teletextPage: Int32?
+  var _deinterlaceState: Int32?
+  var _deinterlaceMode: String?
+  var _audioOutputModule: String?
+  var _audioOutputDevice: String?
+  var _viewpoint: Viewpoint?
+  /// The list player currently driving this handle, if any. The native
+  /// list player binds the raw `libvlc_media_player_t*` once, so every
+  /// handle replacement must re-bind it or the list player keeps
+  /// driving a released pointer.
+  weak var attachedMediaListPlayer: MediaListPlayer?
   /// The platform view currently receiving video frames. Held strongly
   /// because libVLC stores the view as an unretained raw pointer in its
   /// `drawable-nsobject` variable and reads it asynchronously from the
@@ -355,13 +457,14 @@ public final class Player {
   /// across the offloaded release so `libvlc_media_player_release` can
   /// tear down the vout before ARC releases the view.
   var drawable: AnyObject?
-  private var drawableOwner: ObjectIdentifier?
+  var drawableOwner: ObjectIdentifier?
   var needsDrawableRebindForPlayback = false
-  private var nativePlayerHasHostedDrawable = false
-  private var nativePlayerNeedsReplacementBeforePlayback = false
-  private var retainedDrawablesUntilNativePlayerRelease: [AnyObject] = []
+  var nativePlayerHasHostedDrawable = false
+  var nativePlayerNeedsReplacementBeforePlayback = false
+  var retainedDrawablesUntilNativePlayerRelease: [AnyObject] = []
   var selectedRenderer: RendererItem?
   var nativePlayerHasStartedPlayback = false
+  var isShutdown = false
   let instance: VLCInstance
 
   // MARK: - Lifecycle
@@ -373,13 +476,14 @@ public final class Player {
     pointer = p
     self.instance = instance
     eventBridge = EventBridge(
-      eventManager: libvlc_media_player_event_manager(p)!
+      eventManager: libvlc_media_player_event_manager(p)!,
+      endCoordinator: endCoordinator
     )
     playbackIntentBridge = Broadcaster<Bool>(defaultBufferSize: 16)
     startEventConsumer()
   }
 
-  private static func makeNativePlayer(instance: VLCInstance) -> OpaquePointer {
+  static func makeNativePlayer(instance: VLCInstance) -> OpaquePointer {
     guard let p = libvlc_media_player_new(instance.pointer) else {
       preconditionFailure("Failed to create libvlc media player. Is the libvlc.xcframework linked correctly?")
     }
@@ -423,154 +527,13 @@ public final class Player {
     nonisolated(unsafe) let p = pointer
     let resumeBeforeRelease = nativePlaybackState == .paused
     DispatchQueue.global(qos: .utility).async {
-      bridge.invalidate()
-      Self.stopNativePlayerBeforeRelease(p, resumeBeforeStop: resumeBeforeRelease)
-      libvlc_media_player_release(p)
-      _ = drawables
+      Self.teardownNativePlayer(
+        p,
+        bridge: bridge,
+        retainedDrawables: drawables,
+        resumeBeforeStop: resumeBeforeRelease
+      )
     }
-  }
-
-  // MARK: - Video Drawable
-
-  /// Attaches (or detaches, when `nil`) the platform-native view that
-  /// libVLC renders video into. `Player` holds the view strongly for
-  /// the duration of the attachment so libVLC's raw `drawable-nsobject`
-  /// pointer stays valid against asynchronous reads from the decode
-  /// thread. Callers should normally use ``VideoView`` in SwiftUI; this
-  /// is the lower-level API it builds on.
-  func setDrawable(_ newDrawable: AnyObject?) {
-    drawableOwner = newDrawable.map(ObjectIdentifier.init)
-    applyDrawable(newDrawable)
-  }
-
-  func claimDrawableOwnership(_ owner: AnyObject) {
-    drawableOwner = ObjectIdentifier(owner)
-  }
-
-  func releaseDrawableOwnership(_ owner: AnyObject) {
-    guard isDrawableOwner(owner) else { return }
-    drawableOwner = nil
-    if isCurrentDrawable(owner) {
-      applyDrawable(nil)
-    }
-  }
-
-  func setDrawable(_ newDrawable: AnyObject, owner: AnyObject) {
-    guard isDrawableOwner(owner) else { return }
-    applyDrawable(newDrawable)
-  }
-
-  func clearDrawable(ifCurrent staleDrawable: AnyObject) {
-    guard isCurrentDrawable(staleDrawable) else { return }
-    if drawableOwner == ObjectIdentifier(staleDrawable) {
-      drawableOwner = nil
-    }
-    setDrawable(nil)
-  }
-
-  func isCurrentDrawable(_ candidate: AnyObject) -> Bool {
-    guard let drawable else { return false }
-    return drawable === candidate
-  }
-
-  func isDrawableOwner(_ candidate: AnyObject) -> Bool {
-    drawableOwner == ObjectIdentifier(candidate)
-  }
-
-  private func applyDrawable(_ newDrawable: AnyObject?) {
-    // Bind the outgoing reference to a local so it outlives the libVLC
-    // call. After the ivar is reassigned, ARC would otherwise release
-    // the previous view immediately; the vout thread could still be
-    // mid-deref of that `drawable-nsobject` pointer. `previous`
-    // keeps the previous view alive until this function returns, by which
-    // point libVLC has atomically swapped the variable.
-    let previous = drawable
-    if
-      let previous,
-      nativePlayerNeedsReplacementBeforePlayback,
-      newDrawable.map({ previous !== $0 }) ?? true {
-      retainedDrawablesUntilNativePlayerRelease.append(previous)
-    }
-    drawable = newDrawable
-    if newDrawable != nil {
-      nativePlayerHasHostedDrawable = true
-    }
-    libvlc_media_player_set_nsobject(
-      pointer,
-      newDrawable.map { Unmanaged.passUnretained($0).toOpaque() }
-    )
-    _ = previous
-  }
-
-  func prepareDrawableForPlayback() throws(VLCError) {
-    if nativePlayerNeedsReplacementBeforePlayback {
-      try replaceNativePlayerForDrawablePlayback(target: drawable)
-      return
-    }
-    guard let target = drawable else { return }
-    guard needsDrawableRebindForPlayback else { return }
-    let owner = drawableOwner
-    applyDrawable(nil)
-    drawableOwner = owner
-    applyDrawable(target)
-    needsDrawableRebindForPlayback = false
-  }
-
-  private func replaceNativePlayerForDrawablePlayback(
-    target: AnyObject?,
-    resumeBeforeRelease: Bool = false
-  )
-    throws(VLCError) {
-    let oldPointer = pointer
-    let newPointer = Self.makeNativePlayer(instance: instance)
-    guard let newEventManager = libvlc_media_player_event_manager(newPointer) else {
-      libvlc_media_player_release(newPointer)
-      preconditionFailure("Failed to access libVLC media player event manager.")
-    }
-
-    let playbackRate = libvlc_media_player_get_rate(oldPointer)
-    let playerRole = libvlc_media_player_get_role(oldPointer)
-    let audioDelay = libvlc_audio_get_delay(oldPointer)
-    let subtitleDelay = libvlc_video_get_spu_delay(oldPointer)
-    let subtitleScale = libvlc_video_get_spu_text_scale(oldPointer)
-    let retainedDrawables = retainedDrawablesUntilNativePlayerRelease
-
-    if let currentMedia {
-      libvlc_media_player_set_media(newPointer, currentMedia.pointer)
-    }
-    guard libvlc_media_player_set_renderer(newPointer, selectedRenderer?.pointer) == 0 else {
-      libvlc_media_player_release(newPointer)
-      throw .operationFailed("Set renderer")
-    }
-    _ = libvlc_audio_set_volume(newPointer, Int32(_volume * 100))
-    libvlc_audio_set_mute(newPointer, _isMuted ? 1 : 0)
-    _ = libvlc_media_player_set_rate(newPointer, playbackRate)
-    _ = libvlc_media_player_set_role(newPointer, UInt32(playerRole))
-    _ = libvlc_audio_set_delay(newPointer, audioDelay)
-    _ = libvlc_video_set_spu_delay(newPointer, subtitleDelay)
-    libvlc_video_set_spu_text_scale(newPointer, subtitleScale)
-    libvlc_media_player_set_equalizer(newPointer, _equalizer?.pointer)
-    libvlc_media_player_set_nsobject(
-      newPointer,
-      target.map { Unmanaged.passUnretained($0).toOpaque() }
-    )
-
-    eventBridge.reattach(to: newEventManager)
-    pointer = newPointer
-    applyAspectRatio()
-
-    retainedDrawablesUntilNativePlayerRelease.removeAll()
-    nativePlayerNeedsReplacementBeforePlayback = false
-    needsDrawableRebindForPlayback = false
-    nativePlayerHasHostedDrawable = target != nil
-    nativePlayerHasStartedPlayback = false
-
-    releaseNativePlayer(
-      oldPointer,
-      retaining: retainedDrawables,
-      resumeBeforeStop: resumeBeforeRelease
-    )
-    notifyMediaDependentObservables()
   }
 
   // MARK: - Media Loading
@@ -584,6 +547,14 @@ public final class Player {
   public func load(_ media: sending Media) {
     currentMedia = media
     resetMediaDerivedState()
+    // No `markLibraryStop()` here: setting media on a *started* handle
+    // replaces the input seamlessly — libVLC 4 emits `MediaStopping` for
+    // the interrupted input but the player never leaves the started
+    // state, so no `Stopped` ever arrives to consume the flag. A mark
+    // here goes stale and silently swallows the new media's genuine
+    // natural end. (An explicit `stop()` before `load()` records its own
+    // flag, and its in-flight `Stopped` consumes it — see
+    // ``PlaybackEndCoordinator/clearForHandleReplacement()``.)
     libvlc_media_player_set_media(pointer, media.pointer)
     // No eager `refreshTracks()` here. The track list isn't populated
     // until libVLC emits `ESAdded` events after the demuxer opens, so
@@ -633,6 +604,7 @@ public final class Player {
   ///   cannot be applied to a replacement native player.
   public func play() throws(VLCError) {
     try prepareDrawableForPlayback()
+    didReachEnd = false
     if libvlc_media_player_play(pointer) == -1 {
       publishPlaybackIntent(false)
       let reason = libvlc_errmsg().map { String(cString: $0) } ?? "unknown"
@@ -773,6 +745,11 @@ public final class Player {
   }
 
   /// Stops playback asynchronously.
+  ///
+  /// The native stop completes later, signalled by the
+  /// `.stateChanged(.stopped)` event — use ``stopAndWait()`` when
+  /// teardown must not race the audio/video output drain (for example
+  /// before deactivating a shared `AVAudioSession`).
   public func stop() {
     if nativePlaybackState == .paused {
       libvlc_media_player_set_pause(pointer, 0)
@@ -786,109 +763,20 @@ public final class Player {
     } else {
       needsDrawableRebindForPlayback = drawable != nil
     }
+    // The state read and the mark are not atomic against the event
+    // thread: a natural end's `Stopped` can land in between, consuming
+    // nothing and leaving this mark stale — which costs exactly one
+    // suppressed natural end on the next session before the flag is
+    // consumed. The window is microseconds wide and the failure
+    // self-heals; closing it would need a session generation token
+    // threaded through the callback for no practical gain.
+    switch nativePlaybackState {
+    case .idle, .stopped, .error:
+      break
+    default:
+      endCoordinator.markLibraryStop()
+    }
     libvlc_media_player_stop_async(pointer)
-  }
-
-  /// Seeks to an absolute time in the current media.
-  ///
-  /// Throws instead of silently ignoring invalid requests. Check
-  /// ``isSeekable`` before exposing scrub controls. The native seek is
-  /// asynchronous; SwiftVLC publishes the requested time immediately after
-  /// validation so paused players update their UI even if libVLC does not
-  /// emit a follow-up `timeChanged` event.
-  ///
-  /// - Throws: ``VLCError/invalidState(_:)`` if the current media is not
-  ///   seekable, or ``VLCError/invalidInput(_:)`` if `time` is negative,
-  ///   outside libVLC's millisecond range, or beyond known duration.
-  public func seek(to time: Duration) throws(VLCError) {
-    let milliseconds = try checkedSeekMilliseconds(for: time, parameter: "time")
-    libvlc_media_player_set_time(pointer, milliseconds, /* fast */ false)
-    currentTime = .milliseconds(milliseconds)
-  }
-
-  /// Seeks to a fractional position in the current media.
-  ///
-  /// `PlaybackPosition` clamps to `0.0 ... 1.0` on construction. This
-  /// method still throws if the player does not yet know media duration or
-  /// if the current media is not seekable.
-  public func seek(to position: PlaybackPosition) throws(VLCError) {
-    guard let duration else {
-      throw .invalidState("duration is not known")
-    }
-    let durationMs = try duration.checkedNonnegativeMilliseconds(parameter: "duration")
-    let target = checkedMilliseconds(for: position, durationMs: durationMs)
-    try seek(to: .milliseconds(target))
-  }
-
-  /// Seeks by a relative offset from the current position.
-  ///
-  /// Negative offsets rewind, positive offsets fast-forward. The target is
-  /// clamped to the known playable range after validating the offset.
-  ///
-  /// - Throws: ``VLCError/invalidState(_:)`` if the current media is not
-  ///   seekable, or ``VLCError/invalidInput(_:)`` if the offset/current
-  ///   time cannot be represented in libVLC's millisecond unit.
-  public func seek(by offset: Duration) throws(VLCError) {
-    guard isSeekable else {
-      throw .invalidState("current media is not seekable")
-    }
-
-    let currentMs = try currentTime.checkedMilliseconds(parameter: "currentTime")
-    let offsetMs = try offset.checkedMilliseconds(parameter: "offset")
-    let targetResult = currentMs.addingReportingOverflow(offsetMs)
-    guard !targetResult.overflow else {
-      throw .invalidInput("offset is outside the supported millisecond range")
-    }
-
-    var targetMs = Swift.max(0, targetResult.partialValue)
-    if let duration {
-      let durationMs = try duration.checkedNonnegativeMilliseconds(parameter: "duration")
-      targetMs = Swift.min(targetMs, durationMs)
-    }
-
-    libvlc_media_player_set_time(pointer, targetMs, /* fast */ false)
-    currentTime = .milliseconds(targetMs)
-  }
-
-  private func checkedSeekMilliseconds(for time: Duration, parameter: String) throws(VLCError) -> Int64 {
-    guard isSeekable else {
-      throw .invalidState("current media is not seekable")
-    }
-
-    let milliseconds = try time.checkedNonnegativeMilliseconds(parameter: parameter)
-    if let duration {
-      let durationMs = try duration.checkedNonnegativeMilliseconds(parameter: "duration")
-      guard milliseconds <= durationMs else {
-        throw .invalidInput("\(parameter) must not exceed current media duration")
-      }
-    }
-    return milliseconds
-  }
-
-  private func checkedMilliseconds(for position: PlaybackPosition, durationMs: Int64) -> Int64 {
-    guard position.rawValue > 0 else { return 0 }
-    guard position.rawValue < 1 else { return durationMs }
-
-    let scaled = (Double(durationMs) * position.rawValue).rounded()
-    guard scaled.isFinite, scaled > 0 else { return 0 }
-    guard scaled < Double(Int64.max) else { return durationMs }
-    return Swift.min(Int64(scaled), durationMs)
-  }
-
-  /// Pauses playback and advances one video frame.
-  ///
-  /// Requires the current media to be pausable (see ``isPausable``).
-  /// Calling repeatedly yields frame-by-frame stepping.
-  public func nextFrame() {
-    libvlc_media_player_next_frame(pointer)
-    // libVLC doesn't emit `MediaPlayerTimeChanged` after a next-frame
-    // step while paused: the decoder advances one frame but the event
-    // thread stays quiescent. Read the authoritative time directly so
-    // `currentTime` reflects the step.
-    let ms = libvlc_media_player_get_time(pointer)
-    if ms >= 0 {
-      currentTime = .milliseconds(ms)
-    }
   }
 
   // MARK: - External Tracks
@@ -928,7 +816,7 @@ public final class Player {
 
   // MARK: - Video
 
-  private func applyAspectRatio() {
+  func applyAspectRatio() {
     if let ratioString = aspectRatio.vlcString {
       ratioString.withCString { cstr in
         libvlc_video_set_aspect_ratio(pointer, cstr)

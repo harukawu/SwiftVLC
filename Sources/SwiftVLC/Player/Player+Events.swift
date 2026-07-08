@@ -34,9 +34,19 @@ extension Player {
   /// Spawns the event-consuming `Task` that mirrors libVLC events
   /// onto observable properties. Captures `eventBridge` strongly and
   /// `self` weakly to avoid the retain cycle Player → eventTask → Player.
+  ///
+  /// The subscription is unbounded: `state` and every other mirrored
+  /// property must not skip a transition just because the main actor
+  /// lagged behind a burst. The cost is that during active playback the
+  /// buffer grows at full event rate (the ~30 Hz `timeChanged`/
+  /// `positionChanged` firehose) for as long as the main actor is
+  /// stalled — small enum payloads, proportional to stall duration. A
+  /// main actor stalled long enough for that to matter is already a
+  /// broken app; a lossy buffer here would instead leave the observable
+  /// mirror permanently wrong about a one-shot transition.
   func startEventConsumer() {
     let bridge = eventBridge
-    let stream = bridge.makeSourcedStream()
+    let stream = bridge.makeSourcedStream(policy: .unbounded)
     eventTask = Task { [weak self] in
       for await sourcedEvent in stream {
         guard !Task.isCancelled else { return }
@@ -109,6 +119,14 @@ extension Player {
 
     case .tracksChanged:
       refreshTracks()
+      // Adaptive streams can switch resolution mid-stream without any
+      // dedicated size event; libVLC reports the change through the
+      // track list (ES selection/update), so re-signal the decoded
+      // size here for observers to re-read. `hasVideoOutput` is a
+      // selected-track probe over the same data, so it is track-driven
+      // too.
+      withMutation(keyPath: \.videoSize) {}
+      withMutation(keyPath: \.hasVideoOutput) {}
 
     case .mediaChanged:
       syncCurrentMediaFromNative()
@@ -155,6 +173,11 @@ extension Player {
     case .titleSelectionChanged:
       withMutation(keyPath: \.currentTitle) {}
 
+    case .voutChanged(let count):
+      activeVideoOutputs = count
+      withMutation(keyPath: \.videoSize) {}
+      withMutation(keyPath: \.hasVideoOutput) {}
+
     // Events without a matching observable property are only exposed
     // on the raw `events` stream; consumers that care subscribe there.
     case .audioDeviceChanged:
@@ -165,7 +188,19 @@ extension Player {
       withMutation(keyPath: \.selectedProgram) {}
       withMutation(keyPath: \.isProgramScrambled) {}
 
-    case .corked, .uncorked, .voutChanged,
+    case .endReached:
+      // A consumer of the public stream can observe `.endReached` and
+      // call `play()` before this internal mirror drains its copy of
+      // the same event; the intent flag (set synchronously by `play()`)
+      // marks that queued copy as belonging to the finished session, not
+      // the new one. The bare-`load()` analog self-heals: its
+      // `.mediaChanged` is queued behind the stale `.endReached` and
+      // resets the flag right after.
+      if !isPlaybackRequestedActive {
+        didReachEnd = true
+      }
+
+    case .corked, .uncorked,
          .recordingChanged, .titleListChanged, .snapshotTaken,
          .mediaStopping:
       break
@@ -255,6 +290,8 @@ extension Player {
     isSeekable = false
     isPausable = false
     bufferFill = 0
+    activeVideoOutputs = 0
+    didReachEnd = false
     withMutation(keyPath: \.position) {
       _position = 0
     }
@@ -284,6 +321,8 @@ extension Player {
     withMutation(keyPath: \.currentAudioDevice) {}
     withMutation(keyPath: \.selectedAudioTrack) {}
     withMutation(keyPath: \.selectedSubtitleTrack) {}
+    withMutation(keyPath: \.videoSize) {}
+    withMutation(keyPath: \.hasVideoOutput) {}
   }
 
   /// Reads length / seekable / pausable directly from libVLC and

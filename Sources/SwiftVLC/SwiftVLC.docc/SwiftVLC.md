@@ -72,8 +72,10 @@ audio and video overlay APIs.
 
 - <doc:HandlingErrors>
 - <doc:ConcurrencyModel>
+- <doc:IntegrationTopology>
 - <doc:Logging>
 - <doc:ComparisonWithVLCKit>
+- <doc:VLCKitPortingGuide>
 
 ### Playback
 

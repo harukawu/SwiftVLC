@@ -78,8 +78,7 @@ let package = Package(
     .testTarget(
       name: "SwiftVLCTests",
       // CLibVLC is available transitively through SwiftVLC. Re-linking it
-      // here can load duplicate Objective-C runtime classes from libVLC's
-      // static dependencies.
+      // here can introduce duplicate libVLC runtime linkage paths.
       dependencies: [
         "SwiftVLC",
         .product(name: "CustomDump", package: "swift-custom-dump")

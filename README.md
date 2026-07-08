@@ -47,7 +47,7 @@ VideoLAN's Apple wrapper, [VLCKit](https://code.videolan.org/videolan/VLCKit), i
 | **Errors** | `throws(VLCError)`, typed and exhaustive | `NSError` codes |
 | **Events** | `AsyncStream<PlayerEvent>` with multiple consumers | `NSNotificationCenter` |
 | **libVLC generation** | 4.0 | 3.x stable line; 4.0 alpha packages exist |
-| **SwiftUI PiP** | iOS via public AVKit sample buffers; macOS private backend is SPI opt-in | App-supplied integration |
+| **SwiftUI PiP** | iOS via libVLC's native AVKit-backed drawable path; macOS private backend is SPI opt-in | App-supplied integration |
 | **Swift 6 safe** | Yes, with strict concurrency | No |
 
 ## Features
@@ -293,16 +293,20 @@ invocation, idempotently:
 8. **`dup3` / `pipe2`.** Forced unavailable via autoconf cache vars. iOS
    Simulator SDK 26 exports these Linux-only syscalls from libSystem, fooling
    configure into using them.
+9. **Chromecast hardening.** Applies the in-repo
+   `scripts/patches/0001-chromecast-hardening.patch` so Chromecast discovery
+   and teardown paths tolerate missing state instead of crashing.
 
 `git reset --hard` only runs when HEAD is not at `VLC_HASH`, so the patches and per-platform build dirs survive repeated runs.
 
 ## Releasing
 
-Releases advance `main`: `release.sh` rewrites `Package.swift` to the new
-remote xcframework URL + checksum, pins the Showcase app to that exact SwiftVLC
-version, tags that commit, uploads the zip as a GitHub Release asset, and then
-pushes `main` to that same commit. `setup-dev.sh` is what flips a working
-checkout back to local sources for day-to-day development.
+Fork releases are cut from `codex-ios-dynamic-lgpl-rebuild`; `main` remains
+untouched. `release.sh` rewrites `Package.swift` to the new remote xcframework
+URL + checksum, pins the Showcase app to that exact SwiftVLC version, tags that
+commit, uploads the zip as a GitHub Release asset, and then pushes the rebuild
+branch. `setup-dev.sh` is what flips a working checkout back to local sources
+for day-to-day development.
 
 ```bash
 ./scripts/build-libvlc.sh --ios-only     # produces Vendor/libvlc.xcframework
@@ -319,9 +323,9 @@ What `release.sh` does:
 5. Commits that change and tags it as `vX.Y.Z`.
 6. Pushes the tag first so GitHub can attach the release asset to that exact commit.
 7. Uploads the zip to a new GitHub Release.
-8. Pushes `main` to the same commit, so `main` always references the latest published xcframework and Showcase package version.
+8. Pushes `codex-ios-dynamic-lgpl-rebuild` to the same commit. `main` is intentionally left untouched.
 
-Preflight refuses non-`main` branches, uncommitted changes in `Package.swift` or the Showcase project, pre-existing local or remote tags, and unauthenticated `gh`. If a pre-commit rewrite fails, the script restores `Package.swift` and the Showcase project before exiting. If the tag push succeeds but a later step fails, `origin/main` is still untouched; finish the GitHub Release (or delete the tag) before retrying.
+Preflight refuses branches other than `codex-ios-dynamic-lgpl-rebuild`, uncommitted changes in `Package.swift` or the Showcase project, pre-existing local or remote tags, and unauthenticated `gh`. If a pre-commit rewrite fails, the script restores `Package.swift` and the Showcase project before exiting. If the tag push succeeds but a later step fails, `origin/main` is still untouched; finish the GitHub Release (or delete the tag) before retrying the branch push.
 
 ## Architecture
 

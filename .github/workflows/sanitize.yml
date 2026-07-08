@@ -3,7 +3,9 @@ name: Sanitizers
 # Sanitizer runs are slower than the regular test job (TSan instruments
 # every memory access, ~3-5x slowdown; ASan ~2x slowdown), so they run
 # only on PRs that touch concurrency-sensitive code, on push to main,
-# or weekly to catch regressions in dependencies.
+# or weekly to catch regressions in dependencies. This fork ships an
+# iOS-only dynamic libVLC artifact, so sanitizers run through xcodebuild
+# on an iOS Simulator rather than host `swift test`.
 #
 # Scoped to the race/lifecycle/memory test suites — these are the suites
 # that exist *because* of races. Running the full test suite under
@@ -42,9 +44,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sanitizer: [thread, address]
-    runs-on: macos-latest
-    timeout-minutes: 30
+        include:
+          - sanitizer: thread
+            xcodebuild_arg: "-enableThreadSanitizer YES"
+          - sanitizer: address
+            xcodebuild_arg: "-enableAddressSanitizer YES"
+    runs-on: macos-26
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v6
@@ -53,75 +59,40 @@ jobs:
       - uses: maxim-lobanov/setup-xcode@v1
         timeout-minutes: 5
         with:
-          xcode-version: latest-stable
-
-      - uses: SwiftyLab/setup-swift@v1.14.0
-        timeout-minutes: 8
-        with:
-          swift-version: "6.3.1"
+          xcode-version: "26.4"
 
       - name: Print toolchain
         timeout-minutes: 1
-        run: xcrun --toolchain "$TOOLCHAINS" swift --version
-
-      - name: Point Package.swift at last released xcframework
-        id: xcf
-        timeout-minutes: 1
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./scripts/ci-use-released-xcframework.sh
+        run: |
+          xcodebuild -version
+          xcrun swift --version
 
       - name: Cache libvlc xcframework
         uses: actions/cache@v5
         timeout-minutes: 5
         with:
-          path: .build/artifacts
-          key: libvlc-xcf-${{ steps.xcf.outputs.sha }}
+          path: Vendor
+          key: libvlc-xcf-vendor-${{ hashFiles('Package.swift') }}
           enableCrossOsArchive: false
 
-      # Sanitizer-instrumented build products differ from the standard
-      # debug build, so cache them separately. Cache key includes the
-      # sanitizer name to avoid TSan and ASan stomping each other.
-      - name: Cache build products (sanitizer-${{ matrix.sanitizer }})
-        uses: actions/cache@v5
-        timeout-minutes: 3
-        with:
-          path: |
-            .build/debug
-            .build/arm64-apple-macosx
-          key: spm-build-sanitizer-${{ matrix.sanitizer }}-${{ hashFiles('Package.swift', 'Sources/**/*.swift', 'Sources/**/*.c', 'Sources/**/*.h', 'Tests/**/*.swift') }}
-          restore-keys: |
-            spm-build-sanitizer-${{ matrix.sanitizer }}-
-
-      - name: Cache SPM dependencies
-        uses: actions/cache@v5
-        timeout-minutes: 2
-        with:
-          path: |
-            .build/checkouts
-            .build/repositories
-            .build/workspace-state.json
-          key: spm-deps-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
-          restore-keys: |
-            spm-deps-${{ runner.os }}-
-
-      # Run only the suites that exist *because* of races/lifecycle/memory
-      # concerns. The general test suite runs unsanitized in `test.yml`.
-      #
-      # `--no-parallel` per the same rationale as the test job: serialized
-      # runs avoid main-actor contention that masks real races as timeouts.
-      #
-      # The 25-minute wall clock is generous because sanitizer-instrumented
-      # builds are 3-5x slower; the per-suite time limits inside the tests
-      # are NOT scaled, so a sanitizer pass that legitimately needs more
-      # time per test will fail with a clearer signal than a wall-clock kill.
-      - name: Run sanitized race tests
-        timeout-minutes: 25
+      - name: Set up Vendor + local Swift package
+        timeout-minutes: 5
         env:
-          CI: "true"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/setup-dev.sh
+
+      - name: Run sanitized iOS tests
+        timeout-minutes: 35
+        env:
+          TEST_RUNNER_CI: "true"
         run: |
-          ./scripts/ci-run-with-timeouts.py 1500 300 \
-            xcrun --toolchain "$TOOLCHAINS" swift test \
-              --sanitize=${{ matrix.sanitizer }} \
-              --no-parallel \
-              --filter "RaceTests|StressTests|MemoryTests|MemoryAndRetainTests|MemoryPressureTests|LifecycleStressTests"
+          xcodebuild test \
+            -scheme SwiftVLC \
+            -destination "platform=iOS Simulator,name=iPhone 17 Pro" \
+            -configuration Debug \
+            ${{ matrix.xcodebuild_arg }} \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO

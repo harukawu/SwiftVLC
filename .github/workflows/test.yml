@@ -48,10 +48,11 @@ jobs:
         timeout-minutes: 2
         run: swiftformat Sources Tests Showcase --lint --strict
 
-  # Showcase apps build gate. Catches API breakage that the SwiftVLC
-  # test suite wouldn't notice — e.g. renaming a public symbol used
-  # only by the Showcase, or breaking the Showcase's Mac/iOS/tvOS/visionOS
-  # build settings. We compile (not test) every scheme.
+  # Showcase app build gate. Catches API breakage that the SwiftVLC
+  # test suite wouldn't notice — e.g. renaming a public symbol used only
+  # by the Showcase, or breaking the Showcase's iOS build settings. This
+  # fork ships an iOS-only libVLC binary artifact, so CI compiles the iOS
+  # scheme only.
   #
   # Schemes are pinned in the Showcase Xcode project to a published
   # `SwiftVLC` version. `setup-dev.sh` flips it to the local repo
@@ -67,16 +68,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scheme: [iOS, macOS, tvOS, visionOS]
+        scheme: [iOS]
         include:
           - scheme: iOS
             destination: "generic/platform=iOS"
-          - scheme: macOS
-            destination: "generic/platform=macOS"
-          - scheme: tvOS
-            destination: "generic/platform=tvOS"
-          - scheme: visionOS
-            destination: "generic/platform=visionOS"
     steps:
       - uses: actions/checkout@v6
         timeout-minutes: 2
@@ -124,143 +119,105 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
+  # iOS test-target compile gate. The `test` job below runs `swift test` on
+  # the macOS host, which only ever type-checks the macOS slice of the test
+  # target — the iOS-gated tests (`#if canImport(UIKit)`, e.g. the native
+  # PiP suite) and the iOS branches of Sources are never compiled there, so
+  # an iOS-only break can reach `main` unseen. `build-for-testing` on an iOS
+  # Simulator destination compiles both Sources and Tests for iOS and fails
+  # CI on any iOS-only break.
+  ios-build:
+    # xcodebuild resolves the package with Xcode's built-in SwiftPM, which
+    # must understand the manifest's Swift 6.3 tools-version — needs Xcode
+    # 26.4+, hence macos-26 (same rationale as the showcase job above).
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        timeout-minutes: 2
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        timeout-minutes: 5
+        with:
+          xcode-version: "26.4"
+
+      - name: Cache libvlc xcframework
+        uses: actions/cache@v5
+        timeout-minutes: 5
+        with:
+          path: Vendor
+          key: libvlc-xcf-vendor-${{ hashFiles('Package.swift') }}
+          enableCrossOsArchive: false
+
+      - name: Set up Vendor + local Swift package
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/setup-dev.sh
+
+      # build-for-testing (not plain build) so the SwiftVLCTests target is
+      # compiled too — that is what type-checks the iOS-gated test code.
+      - name: Build SwiftVLC + tests for iOS Simulator
+        timeout-minutes: 20
+        run: |
+          xcodebuild build-for-testing \
+            -scheme SwiftVLC \
+            -destination "generic/platform=iOS Simulator" \
+            -configuration Debug \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
   test:
-    # `macos-latest` tracks the newest GitHub-provided runner. SwiftVLC
-    # requires Swift 6.3 (Package.swift tools-version), and the current
-    # 6.3 patch is Swift 6.3.1 in Xcode 26.4.1. GHA runner toolchains
-    # can lag, so we install the Swift 6.3.1 open-source toolchain from
-    # swift.org and activate it via the TOOLCHAINS env var.
-    runs-on: macos-latest
-    # Absolute ceiling — the job CANNOT run longer than this. The wrapper
-    # script and step timeouts below enforce tighter bounds; this is the
-    # last line of defense if those fail.
-    timeout-minutes: 20
+    # Runtime test gate for the shipped artifact shape. The LGPL fork ships
+    # iOS device + simulator dynamic framework slices only, so the test suite
+    # runs through xcodebuild on an iOS Simulator instead of host `swift test`.
+    runs-on: macos-26
+    timeout-minutes: 35
 
     steps:
       - uses: actions/checkout@v6
         timeout-minutes: 2
 
-      # Pin Xcode for SDKs / linker / simulators. Current GHA runners
-      # can lag behind the package's tools-version 6.3 manifest, so we
-      # install the Swift 6.3.1 open-source toolchain separately below
-      # and invoke it through
-      # `xcrun --toolchain`.
       - uses: maxim-lobanov/setup-xcode@v1
         timeout-minutes: 5
         with:
-          xcode-version: latest-stable
-
-      # Install Swift 6.3.1 open-source toolchain from swift.org.
-      # Exports $TOOLCHAINS — later steps use `xcrun --toolchain` to run
-      # Swift 6.3.1 on top of the already-set-up Xcode SDKs.
-      #
-      # Pinned to v1.14.0 (latest as of 2026-04-27) rather than @latest
-      # or @v1 so a compromised or breaking release of the action cannot
-      # silently affect our CI. Bump deliberately via Dependabot or a
-      # manual PR.
-      - uses: SwiftyLab/setup-swift@v1.14.0
-        timeout-minutes: 8
-        with:
-          swift-version: "6.3.1"
+          xcode-version: "26.4"
 
       - name: Print toolchain
         timeout-minutes: 1
-        run: xcrun --toolchain "$TOOLCHAINS" swift --version
+        run: |
+          xcodebuild -version
+          xcrun swift --version
 
-      # CI should always test against the last published xcframework (what
-      # SPM consumers get), regardless of whether the checkout currently
-      # points at Vendor/ for local dev or already carries a release URL.
-      # Only the libvlc binaryTarget is rewritten; other Package.swift
-      # edits are preserved.
-      - name: Point Package.swift at last released xcframework
-        id: xcf
-        timeout-minutes: 1
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./scripts/ci-use-released-xcframework.sh
-
-      # The xcframework is the dominant artifact (~1.2 GB unzipped). Keying
-      # on the checksum means the cache only invalidates when the binary
-      # actually changes — unrelated Package.swift edits don't bust it.
       - name: Cache libvlc xcframework
         uses: actions/cache@v5
         timeout-minutes: 5
         with:
-          path: .build/artifacts
-          key: libvlc-xcf-${{ steps.xcf.outputs.sha }}
+          path: Vendor
+          key: libvlc-xcf-vendor-${{ hashFiles('Package.swift') }}
           enableCrossOsArchive: false
 
-      # Compiled outputs — safe to cache across runs with the same toolchain
-      # and source state.
-      - name: Cache build products
-        uses: actions/cache@v5
-        timeout-minutes: 3
-        with:
-          path: |
-            .build/debug
-            .build/arm64-apple-macosx
-            .build/x86_64-apple-macosx
-          key: spm-build-${{ runner.os }}-${{ hashFiles('Package.swift', 'Sources/**/*.swift', 'Sources/**/*.c', 'Sources/**/*.h', 'Tests/**/*.swift') }}
-          restore-keys: |
-            spm-build-${{ runner.os }}-
-
-      - name: Cache SPM dependencies
-        uses: actions/cache@v5
-        timeout-minutes: 2
-        with:
-          path: |
-            .build/checkouts
-            .build/repositories
-            .build/workspace-state.json
-          key: spm-deps-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
-          restore-keys: |
-            spm-deps-${{ runner.os }}-
-
-      # swift test is run through ci-run-with-timeouts.py which enforces
-      # both a wall-clock ceiling and an idle watchdog. If either fires
-      # the entire process group is SIGKILLed.
-      #
-      #   wall_clock = 600s  (10 min)  — enough for fresh xcf download
-      #                                  + cold build + test run on a
-      #                                  slow runner; well inside the
-      #                                  20-minute job ceiling.
-      #   idle       = 180s  (3 min)   — swift test emits a line per
-      #                                  test / suite; 3 min of silence
-      #                                  means the test process is stuck.
-      #
-      # --no-parallel is load-bearing: `Player` is `@MainActor`, so
-      # integration tests that drive libVLC to `.playing` all compete
-      # for the same actor under Swift Testing's default parallel mode.
-      # On a GHA runner that contention stretches a 200 ms test into a
-      # multi-second timeout. Running serially takes ~45 s for the whole
-      # suite with zero flakes — fractions of a cent in GHA billing and
-      # vastly more predictable than paying for periodic retries.
-      - name: Run tests (wall-clock + idle timeouts)
-        timeout-minutes: 12
+      - name: Set up Vendor + local Swift package
+        timeout-minutes: 5
         env:
-          # TestCondition.canPlayMedia reads CI to skip playback tests that
-          # need video output — CI macOS runners are headless.
-          CI: "true"
-        # `xcrun --toolchain "$TOOLCHAINS" swift test` routes through the
-        # Swift 6.3.1 toolchain installed above, while still using the
-        # Xcode-provided SDKs/simulators.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/setup-dev.sh
+
+      - name: Run tests on iOS Simulator
+        timeout-minutes: 25
+        env:
+          TEST_RUNNER_CI: "true"
         run: |
-          ./scripts/ci-run-with-timeouts.py 600 180 \
-            xcrun --toolchain "$TOOLCHAINS" swift test --no-parallel --enable-code-coverage
-
-      - name: Export coverage report
-        timeout-minutes: 1
-        run: ./scripts/export-lcov.sh
-
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: .build/local-quality/coverage/lcov.info
-          disable_search: true
-          flags: swiftpm
-          name: swiftvlc-swiftpm
-
-      - name: Doc coverage
-        timeout-minutes: 3
-        run: ./scripts/doc-coverage.sh
+          xcodebuild test \
+            -scheme SwiftVLC \
+            -destination "platform=iOS Simulator,name=iPhone 17 Pro" \
+            -configuration Debug \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO

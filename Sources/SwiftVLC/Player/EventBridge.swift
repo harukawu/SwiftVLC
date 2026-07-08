@@ -16,10 +16,10 @@ final class EventBridge: Sendable {
   private nonisolated(unsafe) var attachedEventTypes: [Int32]
   private let invalidated = Mutex(false)
 
-  init(eventManager: OpaquePointer) {
+  init(eventManager: OpaquePointer, endCoordinator: PlaybackEndCoordinator) {
     self.eventManager = eventManager
 
-    let context = EventBridgeCallbackContext()
+    let context = EventBridgeCallbackContext(endCoordinator: endCoordinator)
     self.context = context
     let opaque = Unmanaged.passRetained(context).toOpaque()
     contextOpaque = opaque
@@ -65,13 +65,24 @@ final class EventBridge: Sendable {
   }
 
   /// Creates a new independent `AsyncStream` for consuming player events.
-  /// Each stream receives all events broadcast after creation.
-  func makeStream() -> AsyncStream<PlayerEvent> {
-    context.makeStream()
+  /// Each stream receives all events broadcast after creation that pass
+  /// its filter, buffered per `policy`.
+  func makeStream(
+    policy: EventBufferingPolicy?,
+    filter: (@Sendable (PlayerEvent) -> Bool)?
+  ) -> AsyncStream<PlayerEvent> {
+    context.makeStream(policy: policy, filter: filter)
   }
 
-  func makeSourcedStream() -> AsyncStream<SourcedPlayerEvent> {
-    context.makeSourcedStream()
+  func makeSourcedStream(policy: EventBufferingPolicy) -> AsyncStream<SourcedPlayerEvent> {
+    context.makeSourcedStream(policy: policy)
+  }
+
+  /// Pushes an event through the same fan-out path the C callback uses,
+  /// including subscription buffering — unlike
+  /// `Player._handleEventForTesting`, which bypasses the bridge entirely.
+  func _broadcastForTesting(_ event: PlayerEvent, source: UInt) {
+    context.broadcast(event, source: source)
   }
 
   static let playerEventTypes: [Int32] = [
@@ -143,18 +154,36 @@ struct SourcedPlayerEvent {
 private final class EventBridgeCallbackContext: Sendable {
   private let events = Broadcaster<PlayerEvent>(defaultBufferSize: 64)
   private let sourcedEvents = Broadcaster<SourcedPlayerEvent>(defaultBufferSize: 64)
+  let endCoordinator: PlaybackEndCoordinator
 
-  func makeStream() -> AsyncStream<PlayerEvent> {
-    events.subscribe()
+  init(endCoordinator: PlaybackEndCoordinator) {
+    self.endCoordinator = endCoordinator
   }
 
-  func makeSourcedStream() -> AsyncStream<SourcedPlayerEvent> {
-    sourcedEvents.subscribe()
+  func makeStream(
+    policy: EventBufferingPolicy?,
+    filter: (@Sendable (PlayerEvent) -> Bool)?
+  ) -> AsyncStream<PlayerEvent> {
+    events.subscribe(policy: policy, filter: filter)
+  }
+
+  func makeSourcedStream(policy: EventBufferingPolicy) -> AsyncStream<SourcedPlayerEvent> {
+    sourcedEvents.subscribe(policy: policy)
   }
 
   func broadcast(_ event: PlayerEvent, source: UInt) {
-    events.broadcast(event)
-    sourcedEvents.broadcast(SourcedPlayerEvent(source: source, event: event))
+    // Each broadcaster is gated on its own emptiness so a libVLC event
+    // with no consumers costs neither the lock-and-snapshot nor the
+    // sourced-wrapper construction. The sourced broadcast (the player's
+    // internal observable mirror; never carries user filters) runs
+    // first, so a slow user filter on the public stream can only delay
+    // public delivery — internal state is already on its way.
+    if !sourcedEvents.isEmpty {
+      sourcedEvents.broadcast(SourcedPlayerEvent(source: source, event: event))
+    }
+    if !events.isEmpty {
+      events.broadcast(event)
+    }
   }
 
   func finishAll() {
@@ -178,8 +207,22 @@ private func playerEventCallback(
 
   let context = Unmanaged<EventBridgeCallbackContext>.fromOpaque(opaque).takeUnretainedValue()
 
-  if let mapped = mapEvent(event.pointee) {
-    context.broadcast(mapped, source: sourceIdentifier(for: event.pointee))
+  guard let mapped = mapEvent(event.pointee) else { return }
+  let source = sourceIdentifier(for: event.pointee)
+  context.broadcast(mapped, source: source)
+
+  // End-of-media synthesis happens here, on the event thread, immediately
+  // after the `stopped` broadcast: every subscriber observes `.stopped`
+  // then `.endReached` from the same source, with no consumer-lag race
+  // and internal source filtering working unchanged.
+  let coordinator = context.endCoordinator
+  switch mapped {
+  case .encounteredError:
+    coordinator.markError()
+  case .stateChanged(.stopped) where coordinator.consumeStoppedShouldSynthesizeEnd():
+    context.broadcast(.endReached, source: source)
+  default:
+    break
   }
 }
 

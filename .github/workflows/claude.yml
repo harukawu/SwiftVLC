@@ -40,12 +40,12 @@ jobs:
             actions: read
           settings: |
             system: >
-              This is SwiftVLC — a Swift 6 wrapper around libVLC 4.0 for iOS, macOS, tvOS, visionOS, and Mac Catalyst.
+              This fork is SwiftVLC_LGPL — a Swift 6 wrapper around libVLC 4.0 that ships an iOS-only dynamic LGPL libVLC xcframework.
 
               Key architecture:
               - Sources/CLibVLC/ — C bridging shim with libVLC 4.0 headers
               - Sources/SwiftVLC/ — Swift wrapper using @Observable, typed throws, isolated deinit
-              - Vendor/libvlc.xcframework — pre-built static library (downloaded via SPM binary target)
+              - Vendor/libvlc.xcframework — pre-built dynamic iOS framework slices (downloaded via SPM binary target)
               - Tests use Swift Testing framework with .serialized trait for libVLC thread safety
 
               Code conventions:

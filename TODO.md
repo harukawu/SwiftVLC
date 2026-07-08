@@ -283,6 +283,57 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
     - `swift package dump-package` passed and reported the updated binary
       target URL and checksum.
 
+- `[x]` T13 - Merge upstream v0.10.0 source delta
+  - Merge upstream `0c86d84...9065ad6` onto `codex-ios-dynamic-lgpl-rebuild`
+    using `0c86d84` as the merge base, not the local fork-specific `v0.9.0`
+    tag.
+  - Preserve LGPL/iOS dynamic fork behavior while adopting upstream lifecycle,
+    seek, PiP, event-stream, `VLCInstance` identity, Chromecast showcase, tests,
+    fixtures, and documentation changes where compatible.
+  - Completed:
+    - Fetched upstream `main` into `refs/remotes/upstream/main` with
+      `--no-tags`; verified merge base `0c86d849f31ca96e927d15be08966d846355a261`
+      and upstream target `9065ad6338ddd2d689bf6220b45e90ab4695b3a8`.
+    - Resolved conflicts in `Package.swift`, `VLCInstance`, player event tests,
+      `build-libvlc.sh`, and `release.sh`, keeping the fork release URL until
+      the v0.10.0 artifact checksum is known.
+    - Kept `swiftvlc_prepare_bundled_plugins()` before `libvlc_new()` while
+      adopting upstream application-name and HTTP user-agent parameters.
+    - Reapplied the fork's native pause/teardown guard in the new upstream
+      `Player+Teardown` layout and kept the audio-output pause gating tests.
+    - Kept dynamic iOS packaging, `--enable-shared`, verifier guardrails,
+      generated-binary policy, fork README notice, and branch-based release
+      flow; intentionally did not import upstream static vendor-manifest
+      workflow or manifest files.
+    - Adapted the new DynamicHost fixture and CI workflows to iOS-only dynamic
+      framework validation.
+  - Verification:
+    - `bash -n scripts/*.sh`
+    - `bash -n Fixtures/DynamicHost/verify.sh`
+    - `./scripts/build-libvlc.sh --help`
+    - `./scripts/build-libvlc.sh --all` rejected non-iOS builds as expected.
+    - `swift package dump-package`
+    - `plutil -lint Fixtures/DynamicHost/DynamicHost.xcodeproj/project.pbxproj Showcase/SwiftVLCShowcase.xcodeproj/project.pbxproj`
+    - YAML parse check for edited workflow files.
+    - `xcodebuild -list -project Fixtures/DynamicHost/DynamicHost.xcodeproj`
+      resolved the package graph and listed `DynamicHost-iOS` as the only host
+      target.
+
+- `[ ]` T14 - Publish v0.10.0 binary release
+  - Rebuild the ignored dynamic iOS `Vendor/libvlc.xcframework` from the merged
+    scripts with `./scripts/build-libvlc.sh --ios-only`.
+  - Verify artifact shape, linkage, install names, deployment targets, absence
+    of `.a`/`.la` and non-runtime docs/man payloads, and absence of
+    GPL-sensitive filenames.
+  - Run the iOS simulator Swift Testing suite against the rebuilt local
+    artifact and focused merged-area coverage.
+  - Run GPL-focused source/config/artifact scans and update `LGPL-AUDIT.md`
+    with commands and results.
+  - Run `./scripts/release.sh 0.10.0 --dry-run`, update `Package.swift`,
+    README/DocC release references, and the Showcase package pin with the final
+    checksum, then tag `v0.10.0`, push the rebuild branch/tag, and upload the
+    release asset.
+
 ## Owner Decisions
 
 - Keep existing non-iOS platform declarations in `Package.swift`; this fork's

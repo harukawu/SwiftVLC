@@ -110,9 +110,9 @@ extension Integration {
     // MARK: - Volume amplification beyond 1.0
 
     @Test
-    func `Volume amplification up to 1_25`() {
+    func `Volume amplification up to 2_0`() {
       let player = Player(instance: TestInstance.shared)
-      try? player.setAudioVolume(Volume(1.25))
+      try? player.setAudioVolume(Volume(2.0))
       // Volume may not persist exactly without active pipeline
       _ = player.volume
     }
@@ -476,11 +476,7 @@ extension Integration {
       try player1.play(Media(url: TestMedia.twosecURL))
       try player2.play(Media(url: TestMedia.silenceURL))
 
-      guard try await poll(until: { player1.state == .playing }) else {
-        player1.stop()
-        player2.stop()
-        return
-      }
+      try #require(await poll(until: { player1.state == .playing }), "Waiting for: player1.state == .playing")
 
       _ = player1.isPlaying
 

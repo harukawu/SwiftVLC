@@ -5,7 +5,7 @@
 # Prerequisites:
 #   - ./scripts/build-libvlc.sh --ios-only  (produces Vendor/libvlc.xcframework)
 #   - gh authed (gh auth login)
-#   - Clean Package.swift + Showcase project on main
+#   - Clean Package.swift + Showcase project on the rebuild branch
 #
 # Usage:
 #   ./scripts/release.sh 0.1.0
@@ -14,6 +14,7 @@
 set -euo pipefail
 
 REPO="${SWIFTVLC_GITHUB_REPO:-harukawu/SwiftVLC}"
+RELEASE_BRANCH="${SWIFTVLC_RELEASE_BRANCH:-codex-ios-dynamic-lgpl-rebuild}"
 XCFW_PATH="Vendor/libvlc.xcframework"
 SHOWCASE_PROJECT="Showcase/SwiftVLCShowcase.xcodeproj/project.pbxproj"
 ZIP_NAME="libvlc.xcframework.zip"
@@ -36,7 +37,7 @@ for arg in "$@"; do
     --dry-run)            DRY_RUN=true ;;
     --allow-dirty-branch)
       echo "Error: --allow-dirty-branch is no longer supported." >&2
-      echo "  Releases advance origin/main and must be run from main." >&2
+      echo "  Releases must be run from $RELEASE_BRANCH." >&2
       exit 1 ;;
     --help|-h)
       sed -n 's/^# \{0,1\}//p' "$0" | sed -n '/^Usage:/,/^$/p'
@@ -235,6 +236,21 @@ fi
 echo "Verifying dynamic iOS xcframework..."
 "$SCRIPT_DIR/verify-libvlc-xcframework.sh" "$XCFW_PATH"
 
+# Refuse to publish a debug-configured libVLC. Run-time assertions turn
+# malformed-media edge cases into process-killing abort()s (issue #30);
+# build-libvlc.sh disables them by default. assert() embeds its stringified
+# condition only when NDEBUG is undefined, so finding this hxxx_helper assertion
+# text proves the slices were built with --with-asserts by mistake.
+assert_hits=$(find "$XCFW_PATH" -type f -print0 \
+  | xargs -0 strings -a 2>/dev/null \
+  | grep -c 'i_input_nal_length_size || !hh->i_output_nal_length_size' || true)
+if [[ "${assert_hits:-0}" -gt 0 ]]; then
+  echo "Error: libVLC slices were built with run-time assertions enabled." >&2
+  echo "  Shipping them would re-introduce the issue #30 abort() crash." >&2
+  echo "  Rebuild without --with-asserts: ./scripts/build-libvlc.sh --clean-build --ios-only" >&2
+  exit 1
+fi
+
 if ! command -v gh &>/dev/null; then
   echo "Error: GitHub CLI (gh) is required. Install with: brew install gh" >&2
   exit 1
@@ -253,9 +269,9 @@ if [[ "$DRY_RUN" == false ]]; then
   fi
 
   CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-  if [[ "$CURRENT_BRANCH" != "main" ]]; then
+  if [[ "$CURRENT_BRANCH" != "$RELEASE_BRANCH" ]]; then
     echo "Error: refusing to release from branch '$CURRENT_BRANCH'." >&2
-    echo "  Release commits advance origin/main, so rerun from main." >&2
+    echo "  This fork publishes releases from '$RELEASE_BRANCH' and leaves main untouched." >&2
     exit 1
   fi
 
@@ -349,22 +365,20 @@ if [[ "$DRY_RUN" == true ]]; then
   exit 0
 fi
 
-# ── Release commit on main ───────────────────────────────────────────────────
+# ── Release commit on rebuild branch ─────────────────────────────────────────
 #
-# main should always resolve the most recently published xcframework, and the
-# Showcase app should always resolve the matching Swift package release. Local
+# The rebuild branch resolves the most recently published fork xcframework, and
+# the Showcase app resolves the matching Swift package release. Local
 # development can flip both back to repo-local sources via `setup-dev.sh`.
 #
 # Mechanics:
 #   1. Rewrite Package.swift and the Showcase app, commit, and tag.
-#   2. Push the tag first so GitHub can attach the release asset to the exact
-#      commit without advancing origin/main yet.
+#   2. Push the tag first so GitHub can attach the release asset to the exact commit.
 #   3. Create the GitHub Release and upload the zip.
-#   4. Fast-forward origin/main to the same commit, so main always points at
-#      the latest published binary and Showcase package version.
+#   4. Push the rebuild branch. main is intentionally left untouched.
 #
-# If the tag push succeeds but later steps fail, origin/main is still untouched.
-# Finish the GitHub Release (or delete the tag) and then retry the main push.
+# If the tag push succeeds but later steps fail, finish the GitHub Release
+# (or delete the tag) and then retry the branch push.
 
 echo ""
 echo "Creating release commit on $CURRENT_BRANCH..."
@@ -419,10 +433,10 @@ SPM resolves this automatically — just add the package dependency.
 EOF
 )"
 
-echo "Pushing $CURRENT_BRANCH to origin/main..."
-git push origin HEAD:main
+echo "Pushing $CURRENT_BRANCH..."
+git push origin "$CURRENT_BRANCH"
 
-echo "  origin/main → $TAG_COMMIT"
+echo "  origin/$CURRENT_BRANCH → $TAG_COMMIT"
 
 echo ""
 echo "Release $TAG published: https://github.com/$REPO/releases/tag/$TAG"

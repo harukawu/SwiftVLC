@@ -14,10 +14,10 @@ import Synchronization
 /// not use both on the same player.
 ///
 /// Most apps should prefer ``PiPVideoView``, which creates and owns a
-/// `PiPController` behind a single SwiftUI view. On macOS that view owns
-/// VLC's native drawable container for inline playback; its native PiP
-/// start path is disabled unless the `PrivateMacOSPiP` SPI opt-in is
-/// enabled.
+/// `PiPController` behind a single SwiftUI view. On iOS that view uses
+/// libVLC's native drawable PiP integration. On macOS it owns VLC's
+/// native drawable container for inline playback; its native PiP start
+/// path is disabled unless the `PrivateMacOSPiP` SPI opt-in is enabled.
 ///
 /// ```swift
 /// let controller = PiPController(player: player)
@@ -86,7 +86,7 @@ public final class PiPController: NSObject {
   @ObservationIgnored
   private let pauseDebounce: Duration
   @ObservationIgnored
-  private let renderer: PixelBufferRenderer
+  let renderer: PixelBufferRenderer
   @ObservationIgnored
   private let displayLayer: AVSampleBufferDisplayLayer
   /// Holds the playback-delegate proxy for the lifetime of the
@@ -100,15 +100,15 @@ public final class PiPController: NSObject {
   /// actor. Assigned once in `init`; the stored reference is
   /// effectively immutable afterwards.
   @ObservationIgnored
-  private nonisolated let playbackDelegateProxy: PiPPlaybackDelegateProxy
+  nonisolated let playbackDelegateProxy: PiPPlaybackDelegateProxy
   @ObservationIgnored
-  private var pipController: AVPictureInPictureController?
+  var pipController: AVPictureInPictureController?
   @ObservationIgnored
   private var rendererContext: PixelBufferRendererCallbackContext?
   @ObservationIgnored
   private var rendererOpaque: UnsafeMutableRawPointer?
   @ObservationIgnored
-  private var controlTimebase: CMTimebase?
+  var controlTimebase: CMTimebase?
   @ObservationIgnored
   private var stateObserverTask: Task<Void, Never>?
   @ObservationIgnored
@@ -117,10 +117,53 @@ public final class PiPController: NSObject {
   private var possibleObservation: NSKeyValueObservation?
   @ObservationIgnored
   private var activeObservation: NSKeyValueObservation?
+  #if os(iOS)
+  /// Internal, not private: the validation-harness SPI in
+  /// PiPController+Validation.swift probes the backend's wiring.
+  @ObservationIgnored
+  var nativeBackend: IOSNativePiPBackend?
+  #endif
   #if os(macOS)
   @ObservationIgnored
   private var nativeBackend: MacNativePiPBackend?
   #endif
+
+  /// Whether AVKit may start PiP automatically when the app moves to
+  /// the background while this controller's video is playing inline.
+  /// Set by ``PiPVideoView``'s `startsAutomaticallyFromInline` knob;
+  /// the direct public ``init(player:)`` path uses `true`.
+  @ObservationIgnored
+  let startsAutomaticallyFromInline: Bool
+
+  /// Whether this controller configures and activates the shared
+  /// `AVAudioSession` (iOS only). Set by ``PiPVideoView``'s
+  /// `managesAudioSession` knob; the direct public ``init(player:)``
+  /// path uses `true`. When `true`, the
+  /// `.playback` category is set at init but `setActive(true)` is
+  /// deferred to ``start()`` or the first active-playback signal, so
+  /// constructing a controller never re-grabs audio focus from other
+  /// apps. When `false`, the session is never touched.
+  @ObservationIgnored
+  let managesAudioSession: Bool
+
+  /// Whether the deferred `AVAudioSession.setActive(true)` has been
+  /// issued. One-shot per controller; see ``managesAudioSession``.
+  @ObservationIgnored
+  var hasActivatedAudioSession = false
+
+  /// Broadcasts ``PiPEvent``s to every ``pipEvents`` subscriber.
+  /// Terminated in deinit so subscribers' streams finish with the
+  /// controller.
+  @ObservationIgnored
+  let pipEventBroadcaster = Broadcaster<PiPEvent>()
+
+  /// The best-known reason for an in-flight PiP stop, recorded by the
+  /// first discriminating signal (restore callback, start failure,
+  /// programmatic ``stop()``) and consumed by the stop delegate
+  /// callbacks. `nil` when no discriminating signal has been observed;
+  /// see ``PiPController/pipEvents`` for the resolution rules.
+  @ObservationIgnored
+  var pendingStopReason: PiPStopReason?
 
   /// Playback state as PiP sees it. Updated synchronously in
   /// `setPlaying` (PiP-initiated) and by the observer (VLC-initiated,
@@ -136,7 +179,7 @@ public final class PiPController: NSObject {
   /// `pipPlaybackActive` until native playback reaches the requested
   /// state or exits playback entirely.
   @ObservationIgnored
-  private var pendingPiPPlaybackState: Bool?
+  var pendingPiPPlaybackState: Bool?
 
   /// State of the deferred-pause debouncer.
   ///
@@ -191,6 +234,31 @@ public final class PiPController: NSObject {
   /// Whether a PiP window is currently visible.
   public private(set) var isActive: Bool = false
 
+  /// Invoked when the user taps the PiP window's **restore** affordance
+  /// (the "return to app" control), as opposed to the **close** (X)
+  /// button.
+  ///
+  /// Use this to bring your full-screen player UI back on screen when the
+  /// user wants to keep watching in the app. The closure receives a
+  /// completion handler that you **must** call once your interface has
+  /// finished restoring, so AVKit can dismiss the PiP window cleanly. Pass
+  /// `true` if the UI was restored successfully, or `false` if you could
+  /// not bring it back; the value is forwarded to AVKit.
+  ///
+  /// This is *not* called when PiP stops via the close button, an
+  /// end-of-media stop, or a programmatic ``stop()`` — those paths flip
+  /// ``isActive`` to `false` and emit ``PiPEvent/didStop(reason:)``
+  /// with their own ``PiPStopReason``. That distinction is the whole
+  /// point: observe ``isActive`` or ``pipEvents`` for "PiP ended", and
+  /// use this hook for "PiP ended *and the user asked to come back*".
+  ///
+  /// If this is `nil`, restoration completes immediately.
+  ///
+  /// - Note: iOS sample-buffer PiP only. On platforms/backends without a
+  ///   restore affordance this is never called.
+  @ObservationIgnored
+  public var onRestoreUserInterface: (@MainActor (@escaping @MainActor (Bool) -> Void) -> Void)?
+
   /// The layer that renders video frames for both the inline and PiP
   /// presentations.
   ///
@@ -209,6 +277,8 @@ public final class PiPController: NSObject {
     self.player = player
     playbackDriver = .live(player: player)
     pauseDebounce = .milliseconds(250)
+    startsAutomaticallyFromInline = true
+    managesAudioSession = true
     displayLayer = AVSampleBufferDisplayLayer()
     renderer = PixelBufferRenderer(displayLayer: displayLayer)
     playbackDelegateProxy = PiPPlaybackDelegateProxy()
@@ -227,14 +297,47 @@ public final class PiPController: NSObject {
     startPlaybackIntentObserver()
   }
 
-  #if os(macOS)
+  #if os(iOS)
   init(
     player: Player,
-    nativeBackend: MacNativePiPBackend
+    nativeBackend: IOSNativePiPBackend,
+    startsAutomaticallyFromInline: Bool = true,
+    managesAudioSession: Bool = true
   ) {
     self.player = player
     playbackDriver = .live(player: player)
     pauseDebounce = .milliseconds(250)
+    self.startsAutomaticallyFromInline = startsAutomaticallyFromInline
+    self.managesAudioSession = managesAudioSession
+    displayLayer = AVSampleBufferDisplayLayer()
+    renderer = PixelBufferRenderer(displayLayer: displayLayer)
+    playbackDelegateProxy = PiPPlaybackDelegateProxy()
+    self.nativeBackend = nativeBackend
+
+    super.init()
+
+    playbackDelegateProxy.owner = self
+    configureAudioSession()
+    nativeBackend.owner = self
+    updatePiPPossible(nativeBackend.isPossible)
+    updatePiPActive(nativeBackend.isActive)
+    startStateObserver()
+    startPlaybackIntentObserver()
+  }
+  #endif
+
+  #if os(macOS)
+  init(
+    player: Player,
+    nativeBackend: MacNativePiPBackend,
+    startsAutomaticallyFromInline: Bool = true,
+    managesAudioSession: Bool = true
+  ) {
+    self.player = player
+    playbackDriver = .live(player: player)
+    pauseDebounce = .milliseconds(250)
+    self.startsAutomaticallyFromInline = startsAutomaticallyFromInline
+    self.managesAudioSession = managesAudioSession
     displayLayer = AVSampleBufferDisplayLayer()
     renderer = PixelBufferRenderer(displayLayer: displayLayer)
     playbackDelegateProxy = PiPPlaybackDelegateProxy()
@@ -254,11 +357,15 @@ public final class PiPController: NSObject {
   init(
     player: Player,
     playbackDriver: PlaybackDriver,
-    pauseDebounce: Duration
+    pauseDebounce: Duration,
+    startsAutomaticallyFromInline: Bool = true,
+    managesAudioSession: Bool = true
   ) {
     self.player = player
     self.playbackDriver = playbackDriver
     self.pauseDebounce = pauseDebounce
+    self.startsAutomaticallyFromInline = startsAutomaticallyFromInline
+    self.managesAudioSession = managesAudioSession
     displayLayer = AVSampleBufferDisplayLayer()
     renderer = PixelBufferRenderer(displayLayer: displayLayer)
     playbackDelegateProxy = PiPPlaybackDelegateProxy()
@@ -278,33 +385,24 @@ public final class PiPController: NSObject {
   }
 
   isolated deinit {
+    pipEventBroadcaster.terminate()
     cancelDeferredPause()
     stateObserverTask?.cancel()
     playbackIntentObserverTask?.cancel()
     possibleObservation = nil
     activeObservation = nil
-    #if os(macOS)
-    nativeBackend?.owner = nil
-    #endif
+    // No explicit native-backend relinquish: the backend holds its `owner`
+    // weakly, so ARC clears the back-reference as this controller is torn
+    // down. A player swap (`updateUIView`/`updateNSView`) reassigns `owner`
+    // to the successor controller before this one's deinit runs, so the
+    // successor's claim is preserved without us touching it here.
+    pipController?.delegate = nil
+    playbackDelegateProxy.owner = nil
     renderer.setDisplayLayer(nil)
     renderer.setTimebase(nil)
     if let rendererContext, let rendererOpaque {
-      let nativeState = PlayerState(from: libvlc_media_player_get_state(player.pointer))
-      let mayHaveInheritedCallbacks = switch nativeState {
-      case .idle, .stopped, .error:
-        player.isPlaybackRequestedActive
-      case .opening, .buffering, .playing, .paused, .stopping:
-        true
-      }
-      libvlc_video_set_callbacks(player.pointer, nil, nil, nil, nil)
-      libvlc_video_set_format_callbacks(player.pointer, nil, nil)
-      rendererContext.requestRetirement(
-        opaque: rendererOpaque,
-        deferIfVoutMayBeOpening: mayHaveInheritedCallbacks
-      )
-      if mayHaveInheritedCallbacks {
-        scheduleRetiredRendererContextRelease(rendererContext, opaque: rendererOpaque)
-      }
+      rendererContext.requestDeferredRetirement()
+      scheduleRetiredRendererContextRelease(rendererContext, opaque: rendererOpaque)
     }
   }
 
@@ -312,6 +410,13 @@ public final class PiPController: NSObject {
 
   /// Starts Picture-in-Picture if possible and media is loaded.
   public func start() {
+    activateAudioSessionIfNeeded()
+    #if os(iOS)
+    if let nativeBackend {
+      nativeBackend.start()
+      return
+    }
+    #endif
     #if os(macOS)
     if let nativeBackend {
       nativeBackend.start()
@@ -324,7 +429,24 @@ public final class PiPController: NSObject {
   }
 
   /// Stops Picture-in-Picture.
+  ///
+  /// A stop initiated through this method is reported on
+  /// ``pipEvents`` with ``PiPStopReason/unknown``: AVKit gives a
+  /// programmatic stop no discriminating delegate signal, so SwiftVLC
+  /// does not guess a richer reason for it.
   public func stop() {
+    // Recorded unconditionally: between AVKit beginning the start
+    // animation and the didStart callback, `isActive` is still false,
+    // and a stop issued in that window would otherwise be reported as
+    // the user's close tap. A stale record is harmless — the next
+    // willStart/didStart clears it.
+    notePendingStopReason(.unknown)
+    #if os(iOS)
+    if let nativeBackend {
+      nativeBackend.stop()
+      return
+    }
+    #endif
     #if os(macOS)
     if let nativeBackend {
       nativeBackend.stop()
@@ -344,14 +466,6 @@ public final class PiPController: NSObject {
   }
 
   // MARK: - Setup
-
-  private func configureAudioSession() {
-    #if os(iOS)
-    let session = AVAudioSession.sharedInstance()
-    try? session.setCategory(.playback, mode: .moviePlayback)
-    try? session.setActive(true)
-    #endif
-  }
 
   private func setupControlTimebase() {
     var tb: CMTimebase?
@@ -437,7 +551,7 @@ public final class PiPController: NSObject {
     let controller = AVPictureInPictureController(contentSource: contentSource)
     controller.delegate = self
     #if os(iOS)
-    controller.canStartPictureInPictureAutomaticallyFromInline = true
+    controller.canStartPictureInPictureAutomaticallyFromInline = startsAutomaticallyFromInline
     #endif
     pipController = controller
     updatePiPPossible(controller.isPictureInPicturePossible)
@@ -467,7 +581,7 @@ public final class PiPController: NSObject {
     }
   }
 
-  private func updatePiPPossible(_ isPossible: Bool) {
+  func updatePiPPossible(_ isPossible: Bool) {
     guard self.isPossible != isPossible else { return }
     self.isPossible = isPossible
   }
@@ -478,6 +592,12 @@ public final class PiPController: NSObject {
   }
 
   func invalidatePictureInPicturePlaybackState() {
+    #if os(iOS)
+    if let nativeBackend {
+      nativeBackend.invalidatePlaybackState()
+      return
+    }
+    #endif
     #if os(macOS)
     if let nativeBackend {
       nativeBackend.invalidatePlaybackState()
@@ -656,6 +776,13 @@ public final class PiPController: NSObject {
   }
 
   private func startPlaybackIntentObserver() {
+    // The intent stream carries transitions only, with no current-value
+    // replay — a controller built while playback is already active
+    // would otherwise wait for a pause/resume cycle before activating
+    // the deferred audio session.
+    if player.isPlaybackRequestedActive {
+      activateAudioSessionIfNeeded()
+    }
     let intents = player.playbackIntentEvents
     playbackIntentObserverTask = Task { @MainActor [weak self] in
       for await active in intents {
@@ -666,6 +793,9 @@ public final class PiPController: NSObject {
   }
 
   private func handlePlaybackIntentChanged(_ active: Bool) {
+    if active {
+      activateAudioSessionIfNeeded()
+    }
     if let pendingPiPPlaybackState, pendingPiPPlaybackState != active {
       self.pendingPiPPlaybackState = active
     }
@@ -722,7 +852,7 @@ public final class PiPController: NSObject {
   }
 
   @discardableResult
-  private func handleObservedPlaybackActivity(_ active: Bool) -> Bool {
+  func handleObservedPlaybackActivity(_ active: Bool) -> Bool {
     if let pendingPiPPlaybackState {
       if active == pendingPiPPlaybackState {
         self.pendingPiPPlaybackState = nil
@@ -770,13 +900,30 @@ public final class PiPController: NSObject {
     syncTimebase(playing: player.isActive)
   }
 
-  #if os(macOS)
+  #if os(iOS) || os(macOS)
   func handleNativePictureInPictureReady() {
     updatePiPPossible(nativeBackend?.isPossible == true)
   }
 
+  /// Mirrors the native backend's active flag and synthesizes the
+  /// ``PiPEvent``s the backend can observe. libVLC owns the
+  /// `AVPictureInPictureController` (and its delegate) on the native
+  /// drawable path, so the only signal SwiftVLC sees is this active
+  /// flip: `.didStart`/`.didStop` are synthesized from it, will/failed
+  /// events never fire, and the stop reason degrades to
+  /// ``PiPStopReason/unknown`` — including for stops caused by a
+  /// native-handle replacement (player swap, renderer recast) tearing
+  /// PiP down. See ``pipEvents``.
   func handleNativePictureInPictureActiveChanged(_ isActive: Bool) {
+    let changed = self.isActive != isActive
     updatePiPActive(isActive)
+    guard changed else { return }
+    if isActive {
+      pipEventBroadcaster.broadcast(.didStart)
+    } else {
+      pipEventBroadcaster.broadcast(.didStop(reason: .unknown))
+      pendingStopReason = nil
+    }
   }
 
   func handleNativePictureInPictureSetPlaying(_ playing: Bool) {
@@ -840,68 +987,6 @@ public final class PiPController: NSObject {
     guard let tb = controlTimebase else { return }
     syncTimebaseTime()
     CMTimebaseSetRate(tb, rate: playing ? Float64(player.rate) : 0.0)
-  }
-
-  func _setStateForTesting(
-    isPossible: Bool? = nil,
-    isActive: Bool? = nil
-  ) {
-    if let isPossible {
-      updatePiPPossible(isPossible)
-    }
-    if let isActive {
-      updatePiPActive(isActive)
-    }
-  }
-
-  nonisolated func _isPlaybackPausedForTesting(_ controller: AVPictureInPictureController) -> Bool {
-    playbackDelegateProxy.pictureInPictureControllerIsPlaybackPaused(controller)
-  }
-
-  nonisolated func _timeRangeForPlaybackForTesting(_ controller: AVPictureInPictureController) -> CMTimeRange {
-    playbackDelegateProxy.pictureInPictureControllerTimeRangeForPlayback(controller)
-  }
-
-  nonisolated func _didTransitionToRenderSizeForTesting(
-    _ controller: AVPictureInPictureController,
-    size: CMVideoDimensions
-  ) {
-    playbackDelegateProxy.pictureInPictureController(controller, didTransitionToRenderSize: size)
-  }
-
-  /// Hands back the internal playback-delegate proxy so tests that build
-  /// an `AVPictureInPictureController.ContentSource` can pass the object
-  /// that implements `AVPictureInPictureSampleBufferPlaybackDelegate`.
-  nonisolated var _playbackDelegateForTesting: AVPictureInPictureSampleBufferPlaybackDelegate {
-    playbackDelegateProxy
-  }
-
-  func _setPlayingForTesting(_ playing: Bool) {
-    handleSetPlaying(playing)
-  }
-
-  func _pipPlaybackActiveForTesting() -> Bool {
-    pipPlaybackActive
-  }
-
-  func _pendingPiPPlaybackStateForTesting() -> Bool? {
-    pendingPiPPlaybackState
-  }
-
-  func _handleObservedPlaybackActivityForTesting(_ active: Bool) {
-    handleObservedPlaybackActivity(active)
-  }
-
-  func _controlTimebaseRateForTesting() -> Double? {
-    controlTimebase.map { CMTimebaseGetRate($0) }
-  }
-
-  func _skipByIntervalForTesting(_ skipInterval: CMTime) {
-    handleSkip(by: skipInterval) {}
-  }
-
-  func _renderSizeForTesting() -> CMVideoDimensions? {
-    renderer.state.withLock { $0.renderSize }
   }
 }
 

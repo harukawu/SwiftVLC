@@ -28,7 +28,9 @@ require_tool find
 require_tool grep
 require_tool lipo
 require_tool otool
+require_tool strings
 require_tool tr
+require_tool xargs
 
 [[ -d "$XCFW_PATH" ]] || fail "$XCFW_PATH does not exist"
 
@@ -45,6 +47,13 @@ fi
 non_runtime_hit=$(find "$XCFW_PATH" \( -path '*/Resources/share/doc' -o -path '*/Resources/share/man' \) -print -quit)
 if [[ -n "$non_runtime_hit" ]]; then
   fail "non-runtime VLC documentation/manpage resources found in xcframework: $non_runtime_hit"
+fi
+
+assert_hits=$(find "$XCFW_PATH" -type f -print0 \
+  | xargs -0 strings -a 2>/dev/null \
+  | grep -c 'i_input_nal_length_size || !hh->i_output_nal_length_size' || true)
+if [[ "${assert_hits:-0}" -gt 0 ]]; then
+  fail "libVLC slices were built with run-time assertions enabled"
 fi
 
 while IFS= read -r artifact_path; do
