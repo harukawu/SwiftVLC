@@ -493,6 +493,34 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
       README/DocC install snippets use `0.10.4`, and the Showcase project pins
       `https://github.com/harukawu/SwiftVLC` at exact version `0.10.4`.
 
+- `[x]` T19 - Fix consumer clean-build signing for local SwiftPM package use
+  - Xcode clean builds can run app target user script phases before the SwiftPM
+    binary target has been copied into `testVLC.app/Frameworks`, and the final
+    embed can copy from `SourcePackages/artifacts` after the user script phase.
+  - Completed:
+    - Reproduced the local package failure in
+      `/Users/haruka/Developer/Xcode/Test/testVLC`: the README snippet searched
+      only `SourcePackages/checkouts/SwiftVLC`, so local package use left
+      `SWIFTVLC_SCRIPT` empty and produced `line 9: : command not found`.
+    - Updated the test app Run Script phase to call the local checkout at
+      `/Users/haruka/Developer/Xcode/SwiftVLC_LGPL/scripts/sign-libvlc-embedded-framework.sh`
+      and moved that phase to the end of the target Build Phases.
+    - Updated `./scripts/sign-libvlc-embedded-framework.sh` to sign every
+      relevant DerivedData copy it can find: the SwiftPM
+      `SourcePackages/artifacts` xcframework slice, the `TARGET_BUILD_DIR`
+      product framework, and the embedded app copy when present.
+    - Updated README and DocC snippets to support local package development via
+      `SWIFTVLC_SCRIPT` and to fail clearly when the helper cannot be found.
+    - Verified `bash -n scripts/sign-libvlc-embedded-framework.sh`.
+    - Verified a clean generic iOS build of the local-package test app:
+      `xcodebuild -quiet -project /Users/haruka/Developer/Xcode/Test/testVLC/testVLC.xcodeproj -scheme testVLC -configuration Debug -destination 'generic/platform=iOS' -derivedDataPath /private/tmp/testVLC-local-dd-clean3 -skipPackagePluginValidation -skipMacroValidation clean build`.
+    - Confirmed the final app copy at
+      `/private/tmp/testVLC-local-dd-clean3/Build/Products/Debug-iphoneos/testVLC.app/Frameworks/libvlc.framework/libvlccore.dylib`
+      is signed with TeamIdentifier `CP95PW5V2S`, not an ad-hoc signature.
+    - Installed the clean build on iPhone `00008150-0016659C0C2B401C` and
+      launched `com.haruka.testVLC`; the app stayed alive until the 8-second
+      `devicectl` console timeout instead of crashing in dyld.
+
 ## Owner Decisions
 
 - Keep existing non-iOS platform declarations in `Package.swift`; this fork's

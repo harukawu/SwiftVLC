@@ -401,6 +401,58 @@ Release URL:
 https://github.com/harukawu/SwiftVLC/releases/download/v0.10.4/libvlc.xcframework.zip
 ```
 
+### Consumer Clean-Build Signing Follow-Up
+
+After `v0.10.4`, a local-package consumer app exposed an additional Xcode
+ordering issue. A clean app build can run user script phases before
+`libvlc.framework` exists under `testVLC.app/Frameworks`, and Xcode can later
+embed the binary target from `SourcePackages/artifacts` rather than from the
+already processed `TARGET_BUILD_DIR/libvlc.framework`.
+
+Mitigation:
+
+- `./scripts/sign-libvlc-embedded-framework.sh` now signs every relevant
+  DerivedData copy it can find: SwiftPM's `SourcePackages/artifacts`
+  xcframework slice, the `TARGET_BUILD_DIR` framework, and the embedded app
+  framework when present.
+- README and DocC document local package use via `SWIFTVLC_SCRIPT` and include
+  a clear failure path when the helper script cannot be found.
+
+Commands:
+
+```bash
+bash -n scripts/sign-libvlc-embedded-framework.sh
+
+xcodebuild -quiet \
+  -project /Users/haruka/Developer/Xcode/Test/testVLC/testVLC.xcodeproj \
+  -scheme testVLC \
+  -configuration Debug \
+  -destination 'generic/platform=iOS' \
+  -derivedDataPath /private/tmp/testVLC-local-dd-clean3 \
+  -skipPackagePluginValidation \
+  -skipMacroValidation \
+  clean build
+
+codesign -dv --verbose=4 \
+  /private/tmp/testVLC-local-dd-clean3/Build/Products/Debug-iphoneos/testVLC.app/Frameworks/libvlc.framework/libvlccore.dylib
+
+xcrun devicectl device install app \
+  --device 00008150-0016659C0C2B401C \
+  /private/tmp/testVLC-local-dd-clean3/Build/Products/Debug-iphoneos/testVLC.app
+
+xcrun devicectl device process launch \
+  --device 00008150-0016659C0C2B401C \
+  --terminate-existing \
+  --console \
+  --timeout 8 \
+  com.haruka.testVLC
+```
+
+Result: the clean build passed, the final app copy of
+`libvlc.framework/libvlccore.dylib` was signed with TeamIdentifier
+`CP95PW5V2S`, the app installed on the connected iPhone, and launch stayed alive
+until the `devicectl` console timeout instead of failing in dyld.
+
 ## Notes
 
 - `Vendor/libvlc.xcframework` remains a local/release artifact and is not

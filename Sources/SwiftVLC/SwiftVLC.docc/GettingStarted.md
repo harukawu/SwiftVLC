@@ -32,15 +32,33 @@ visionOS 2, and macCatalyst 18.
 ## Add the iOS signing build phase
 
 Physical iOS devices require the nested libVLC dylibs and plugins to be signed
-with your app's signing identity. Add a Run Script phase to your iOS app target
-after SwiftPM embeds package frameworks:
+with your app's signing identity. Add a Run Script phase near the end of your
+iOS app target's Build Phases. The helper signs every DerivedData copy Xcode may
+use for embedding, including SwiftPM's `SourcePackages/artifacts` slice, the
+`TARGET_BUILD_DIR` product, and the embedded app copy if it already exists. For
+local package development, you may set `SWIFTVLC_SCRIPT` directly to your
+checkout's `scripts/sign-libvlc-embedded-framework.sh`.
 
 ```bash
 set -euo pipefail
 
-SWIFTVLC_SCRIPT="${BUILD_DIR}/../../SourcePackages/checkouts/SwiftVLC/scripts/sign-libvlc-embedded-framework.sh"
+SWIFTVLC_SCRIPT="${SWIFTVLC_SCRIPT:-}"
+
+if [ -z "$SWIFTVLC_SCRIPT" ]; then
+  for search_root in \
+    "${BUILD_DIR}/../../SourcePackages/checkouts" \
+    "${SRCROOT}/.." \
+    "${SRCROOT}/../.."
+  do
+    [ -d "$search_root" ] || continue
+    SWIFTVLC_SCRIPT=$(find "$search_root" -path "*/scripts/sign-libvlc-embedded-framework.sh" -print -quit 2>/dev/null || true)
+    [ -n "$SWIFTVLC_SCRIPT" ] && break
+  done
+fi
+
 if [ ! -x "$SWIFTVLC_SCRIPT" ]; then
-  SWIFTVLC_SCRIPT=$(find "${BUILD_DIR}/../../SourcePackages/checkouts" -path "*/scripts/sign-libvlc-embedded-framework.sh" -print -quit)
+  echo "error: SwiftVLC signing script not found; set SWIFTVLC_SCRIPT to scripts/sign-libvlc-embedded-framework.sh" >&2
+  exit 1
 fi
 
 "$SWIFTVLC_SCRIPT"

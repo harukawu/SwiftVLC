@@ -2,11 +2,13 @@
 #
 # sign-libvlc-embedded-framework.sh — Sign libVLC nested code in an app build.
 #
-# Add this to an iOS app target Run Script phase after SwiftPM embeds package
-# frameworks. Xcode re-signs libvlc.framework itself, but it does not re-sign
-# the loose libvlccore.dylib and VLC plugin dylibs inside that framework. Physical
-# iOS devices reject those ad-hoc signatures at dyld load time, so the nested
-# code must be signed with the consuming app's identity.
+# Add this to an iOS app target Run Script phase. Xcode re-signs
+# libvlc.framework itself, but it does not re-sign the loose libvlccore.dylib
+# and VLC plugin dylibs inside that framework. Physical iOS devices reject those
+# ad-hoc signatures at dyld load time, so the nested code must be signed with the
+# consuming app's identity. Clean Xcode builds can embed from SwiftPM's
+# SourcePackages/artifacts cache after user script phases, so this helper signs
+# every relevant DerivedData copy it can find.
 #
 # Usage:
 #   ./scripts/sign-libvlc-embedded-framework.sh
@@ -34,15 +36,58 @@ require_tool grep
 require_tool lipo
 require_tool plutil
 
+FRAMEWORK_PATHS=()
+
+add_framework_path() {
+  local path="${1%/}"
+  local existing
+
+  [[ -d "$path" ]] || return 0
+
+  if (( ${#FRAMEWORK_PATHS[@]} > 0 )); then
+    for existing in "${FRAMEWORK_PATHS[@]}"; do
+      [[ "$existing" == "$path" ]] && return 0
+    done
+  fi
+
+  FRAMEWORK_PATHS+=("$path")
+}
+
+add_swiftpm_artifact_paths() {
+  local artifacts_root="$1"
+  local framework
+
+  [[ -d "$artifacts_root" ]] || return 0
+
+  while IFS= read -r framework; do
+    case "${PLATFORM_NAME:-}" in
+      iphoneos)
+        [[ "$framework" == *simulator* ]] && continue
+        ;;
+      *simulator*)
+        [[ "$framework" != *simulator* ]] && continue
+        ;;
+    esac
+
+    add_framework_path "$framework"
+  done < <(find "$artifacts_root" -type d -path '*/libvlc.xcframework/*/libvlc.framework' -print)
+}
+
 if [[ "${1:-}" != "" ]]; then
-  FRAMEWORK_PATH="$1"
+  add_framework_path "$1"
 else
   [[ -n "${TARGET_BUILD_DIR:-}" ]] || fail "TARGET_BUILD_DIR is unset; pass libvlc.framework path explicitly"
-  [[ -n "${FRAMEWORKS_FOLDER_PATH:-}" ]] || fail "FRAMEWORKS_FOLDER_PATH is unset; pass libvlc.framework path explicitly"
-  FRAMEWORK_PATH="${TARGET_BUILD_DIR%/}/${FRAMEWORKS_FOLDER_PATH%/}/libvlc.framework"
+
+  add_framework_path "${TARGET_BUILD_DIR%/}/libvlc.framework"
+  add_framework_path "${TARGET_BUILD_DIR%/}/${FRAMEWORKS_FOLDER_PATH:-Frameworks}/libvlc.framework"
+
+  if [[ -n "${BUILD_DIR:-}" ]]; then
+    add_swiftpm_artifact_paths "${BUILD_DIR%/}/../../SourcePackages/artifacts"
+  fi
 fi
 
-[[ -d "$FRAMEWORK_PATH" ]] || fail "libvlc.framework not found at $FRAMEWORK_PATH"
+(( ${#FRAMEWORK_PATHS[@]} > 0 )) \
+  || fail "libvlc.framework not found in TARGET_BUILD_DIR or SourcePackages/artifacts; pass libvlc.framework path explicitly"
 
 IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:-}"
 if [[ -z "$IDENTITY" ]]; then
@@ -51,22 +96,6 @@ if [[ -z "$IDENTITY" ]]; then
   else
     fail "EXPANDED_CODE_SIGN_IDENTITY is unset for a signed device build"
   fi
-fi
-
-ROOT_PLIST="$FRAMEWORK_PATH/Info.plist"
-RESOURCES_PLIST="$FRAMEWORK_PATH/Resources/Info.plist"
-MAIN_BINARY="$FRAMEWORK_PATH/libvlc"
-
-[[ -f "$ROOT_PLIST" ]] || fail "missing framework Info.plist: $ROOT_PLIST"
-[[ -f "$MAIN_BINARY" ]] || fail "missing libvlc framework binary: $MAIN_BINARY"
-
-BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw -o - "$ROOT_PLIST" 2>/dev/null) \
-  || fail "cannot read CFBundleIdentifier from $ROOT_PLIST"
-
-if [[ -d "$FRAMEWORK_PATH/Resources" ]]; then
-  cp "$ROOT_PLIST" "$RESOURCES_PLIST"
-  cmp -s "$ROOT_PLIST" "$RESOURCES_PLIST" \
-    || fail "$RESOURCES_PLIST does not match $ROOT_PLIST"
 fi
 
 codesign_quietly() {
@@ -83,32 +112,58 @@ codesign_quietly() {
   rm -f "$log"
 }
 
-signed_nested=0
+sign_framework() {
+  local FRAMEWORK_PATH="$1"
+  local ROOT_PLIST="$FRAMEWORK_PATH/Info.plist"
+  local RESOURCES_PLIST="$FRAMEWORK_PATH/Resources/Info.plist"
+  local MAIN_BINARY="$FRAMEWORK_PATH/libvlc"
+  local BUNDLE_ID
+  local candidate
+  local signed_nested=0
+  local signing_details
 
-while IFS= read -r candidate; do
-  [[ "$candidate" == "$MAIN_BINARY" ]] && continue
+  [[ -d "$FRAMEWORK_PATH" ]] || fail "libvlc.framework not found at $FRAMEWORK_PATH"
+  [[ -f "$ROOT_PLIST" ]] || fail "missing framework Info.plist: $ROOT_PLIST"
+  [[ -f "$MAIN_BINARY" ]] || fail "missing libvlc framework binary: $MAIN_BINARY"
 
-  if lipo -info "$candidate" >/dev/null 2>&1; then
-    codesign_quietly "$candidate"
-    signed_nested=$((signed_nested + 1))
+  BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw -o - "$ROOT_PLIST" 2>/dev/null) \
+    || fail "cannot read CFBundleIdentifier from $ROOT_PLIST"
+
+  if [[ -d "$FRAMEWORK_PATH/Resources" ]]; then
+    cp "$ROOT_PLIST" "$RESOURCES_PLIST"
+    cmp -s "$ROOT_PLIST" "$RESOURCES_PLIST" \
+      || fail "$RESOURCES_PLIST does not match $ROOT_PLIST"
   fi
-done < <(find "$FRAMEWORK_PATH" -type f -print)
 
-codesign_quietly --identifier "$BUNDLE_ID" --preserve-metadata=entitlements,flags --generate-entitlement-der "$FRAMEWORK_PATH"
+  while IFS= read -r candidate; do
+    [[ "$candidate" == "$MAIN_BINARY" ]] && continue
 
-if ! codesign --verify --deep --strict "$FRAMEWORK_PATH" >/dev/null 2>&1; then
-  codesign --verify --deep --strict --verbose=2 "$FRAMEWORK_PATH" >&2 || true
-  fail "libvlc.framework code signature verification failed"
-fi
+    if lipo -info "$candidate" >/dev/null 2>&1; then
+      codesign_quietly "$candidate"
+      signed_nested=$((signed_nested + 1))
+    fi
+  done < <(find "$FRAMEWORK_PATH" -type f -print)
 
-signing_details=$(codesign -dv --verbose=4 "$FRAMEWORK_PATH" 2>&1)
-if ! grep -q "^Identifier=${BUNDLE_ID}$" <<<"$signing_details"; then
-  echo "$signing_details" >&2
-  fail "libvlc.framework signing identifier does not match CFBundleIdentifier"
-fi
-if ! grep -q '^Info.plist entries=' <<<"$signing_details"; then
-  echo "$signing_details" >&2
-  fail "libvlc.framework code signature does not bind Info.plist entries"
-fi
+  codesign_quietly --identifier "$BUNDLE_ID" --preserve-metadata=entitlements,flags --generate-entitlement-der "$FRAMEWORK_PATH"
 
-info "signed libvlc.framework and ${signed_nested} nested Mach-O files with identity ${IDENTITY}"
+  if ! codesign --verify --deep --strict "$FRAMEWORK_PATH" >/dev/null 2>&1; then
+    codesign --verify --deep --strict --verbose=2 "$FRAMEWORK_PATH" >&2 || true
+    fail "libvlc.framework code signature verification failed"
+  fi
+
+  signing_details=$(codesign -dv --verbose=4 "$FRAMEWORK_PATH" 2>&1)
+  if ! grep -q "^Identifier=${BUNDLE_ID}$" <<<"$signing_details"; then
+    echo "$signing_details" >&2
+    fail "libvlc.framework signing identifier does not match CFBundleIdentifier"
+  fi
+  if ! grep -q '^Info.plist entries=' <<<"$signing_details"; then
+    echo "$signing_details" >&2
+    fail "libvlc.framework code signature does not bind Info.plist entries"
+  fi
+
+  info "signed $FRAMEWORK_PATH and ${signed_nested} nested Mach-O files with identity ${IDENTITY}"
+}
+
+for FRAMEWORK_PATH in "${FRAMEWORK_PATHS[@]}"; do
+  sign_framework "$FRAMEWORK_PATH"
+done
