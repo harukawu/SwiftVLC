@@ -256,6 +256,11 @@ if ! command -v gh &>/dev/null; then
   exit 1
 fi
 
+if ! command -v zipinfo &>/dev/null; then
+  echo "Error: zipinfo is required to validate release zip contents." >&2
+  exit 1
+fi
+
 if [[ "$DRY_RUN" == false ]]; then
   if ! gh auth status &>/dev/null; then
     echo "Error: Not authenticated with gh. Run: gh auth login" >&2
@@ -319,7 +324,24 @@ echo "  Before: $BEFORE_SIZE → After: $AFTER_SIZE"
 
 echo "Creating zip..."
 ZIP_PATH="$WORK_DIR/$ZIP_NAME"
-(cd "$WORK_DIR" && ditto -c -k --keepParent libvlc.xcframework "$ZIP_NAME")
+(
+  cd "$WORK_DIR"
+  COPYFILE_DISABLE=1 ditto -c -k --keepParent --norsrc --noextattr libvlc.xcframework "$ZIP_NAME"
+)
+
+appledouble_entries=$(zipinfo -1 "$ZIP_PATH" | grep -E '(^|/)\._' || true)
+if [[ -n "$appledouble_entries" ]]; then
+  echo "Error: release zip contains AppleDouble sidecar entries:" >&2
+  printf '%s\n' "$appledouble_entries" | head -20 >&2
+  exit 1
+fi
+
+archive_entries=$(zipinfo -1 "$ZIP_PATH" | grep -E '(^|/)[^/]+\.(a|la)$' || true)
+if [[ -n "$archive_entries" ]]; then
+  echo "Error: release zip contains static or libtool archive entries:" >&2
+  printf '%s\n' "$archive_entries" | head -20 >&2
+  exit 1
+fi
 
 ZIP_SIZE=$(stat -f%z "$ZIP_PATH")
 ZIP_SIZE_MB=$((ZIP_SIZE / 1024 / 1024))

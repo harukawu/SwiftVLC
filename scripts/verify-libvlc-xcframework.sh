@@ -34,6 +34,11 @@ require_tool xargs
 
 [[ -d "$XCFW_PATH" ]] || fail "$XCFW_PATH does not exist"
 
+appledouble_hit=$(find "$XCFW_PATH" -name '._*' -print -quit)
+if [[ -n "$appledouble_hit" ]]; then
+  fail "AppleDouble sidecar found in xcframework: $appledouble_hit"
+fi
+
 archive_hit=$(find "$XCFW_PATH" \( -name '*.a' -o -name '*.la' \) -print -quit)
 if [[ -n "$archive_hit" ]]; then
   fail "static or libtool archive found in xcframework: $archive_hit"

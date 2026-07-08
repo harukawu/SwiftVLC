@@ -363,6 +363,32 @@ until `AGENTS.md` has been reviewed and approved by the repo owner.
       README/DocC install snippets use `0.10.0`, and the Showcase project pins
       `https://github.com/harukawu/SwiftVLC` at exact version `0.10.0`.
 
+- `[x]` T15 - Publish v0.10.1 packaging-only fix
+  - Remove AppleDouble `._*` sidecar files from the release zip path without
+    rebuilding VLC or changing SwiftVLC source/API behavior.
+  - Add guardrails so future verifier/release runs fail if AppleDouble
+    sidecars, static archives, or libtool archives enter the artifact/zip.
+  - Completed:
+    - Added an AppleDouble sidecar rejection to
+      `./scripts/verify-libvlc-xcframework.sh`.
+    - Updated `./scripts/release.sh` to create zips with
+      `COPYFILE_DISABLE=1 ditto --norsrc --noextattr`, then inspect zip entries
+      for AppleDouble sidecars and `.a`/`.la` archives before computing the
+      SwiftPM checksum.
+    - `./scripts/release.sh 0.10.1 --dry-run` passed through the patched
+      verifier, strip, zip, archive-entry scan, and checksum flow.
+    - Built the persistent clean upload zip at
+      `/private/tmp/SwiftVLC-release-v0.10.1.J6Foz8/libvlc.xcframework.zip`;
+      size is 117,848,653 bytes and SwiftPM checksum is
+      `3cb62b70d3d20f0e17f70c8f78d08877be068dd1bb574413092ff13ba6c43bb1`.
+    - Verified the local artifact has zero AppleDouble, `.a`, or `.la` entries,
+      and the v0.10.1 zip has no AppleDouble, static archive, or libtool archive
+      entries.
+    - `Package.swift` points at
+      `https://github.com/harukawu/SwiftVLC/releases/download/v0.10.1/libvlc.xcframework.zip`,
+      README/DocC install snippets use `0.10.1`, and the Showcase project pins
+      `https://github.com/harukawu/SwiftVLC` at exact version `0.10.1`.
+
 ## Owner Decisions
 
 - Keep existing non-iOS platform declarations in `Package.swift`; this fork's

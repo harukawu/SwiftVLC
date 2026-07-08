@@ -124,13 +124,70 @@ Release URL:
 https://github.com/harukawu/SwiftVLC/releases/download/v0.10.0/libvlc.xcframework.zip
 ```
 
+## Patch Release v0.10.1
+
+The `v0.10.0` zip was later found to contain AppleDouble `._*` sidecar entries
+introduced by the archive step, even though the local `Vendor/libvlc.xcframework`
+tree did not contain them. This is packaging noise rather than a static-linking
+or LGPL issue, but plugin-like sidecar filenames are confusing and should not be
+published.
+
+Release guardrails added for `v0.10.1`:
+
+- `./scripts/verify-libvlc-xcframework.sh` now rejects AppleDouble sidecars in
+  addition to `.a`, `.la`, doc/man payloads, GPL-sensitive names, assertion
+  builds, wrong Mach-O types, bad install names, and build-path load commands.
+- `./scripts/release.sh` now zips with
+  `COPYFILE_DISABLE=1 ditto --norsrc --noextattr` and rejects zip entries
+  matching AppleDouble sidecars, static archives, or libtool archives before
+  computing the SwiftPM checksum.
+
+Commands:
+
+```bash
+find Vendor/libvlc.xcframework \( -name '._*' -o -name '*.a' -o -name '*.la' \) -print | wc -l
+./scripts/verify-libvlc-xcframework.sh Vendor/libvlc.xcframework
+./scripts/release.sh 0.10.1 --dry-run
+zipinfo -1 /private/tmp/SwiftVLC-release-v0.10.1.J6Foz8/libvlc.xcframework.zip | grep -E '(^|/)\._' || true
+zipinfo -1 /private/tmp/SwiftVLC-release-v0.10.1.J6Foz8/libvlc.xcframework.zip | grep -E '(^|/)[^/]+\.(a|la)$' || true
+swift package compute-checksum /private/tmp/SwiftVLC-release-v0.10.1.J6Foz8/libvlc.xcframework.zip
+```
+
+Results: the local artifact has zero AppleDouble, static archive, or libtool
+archive entries; the stricter verifier passed; the dry run completed; the final
+zip has no AppleDouble, `.a`, or `.la` entries.
+
+Final release asset:
+
+```text
+/private/tmp/SwiftVLC-release-v0.10.1.J6Foz8/libvlc.xcframework.zip
+```
+
+Size:
+
+```text
+117,848,653 bytes
+```
+
+SwiftPM checksum:
+
+```text
+3cb62b70d3d20f0e17f70c8f78d08877be068dd1bb574413092ff13ba6c43bb1
+```
+
+Release URL:
+
+```text
+https://github.com/harukawu/SwiftVLC/releases/download/v0.10.1/libvlc.xcframework.zip
+```
+
 ## Notes
 
 - `Vendor/libvlc.xcframework` remains a local/release artifact and is not
   committed.
-- The verifier now fails if future packaging reintroduces `.a`, `.la`,
-  `Resources/share/doc`, `Resources/share/man`, or obvious GPL-sensitive
-  component filenames.
-- `Package.swift` is pinned to the fork `v0.10.0` release asset and checksum
+- The verifier now fails if future packaging reintroduces AppleDouble sidecars,
+  `.a`, `.la`, `Resources/share/doc`, `Resources/share/man`, or obvious
+  GPL-sensitive component filenames.
+- `Package.swift` is pinned to the fork `v0.10.1` release asset and checksum
   above; the binary artifact remains ignored locally and is shipped only as a
   GitHub Release asset.
